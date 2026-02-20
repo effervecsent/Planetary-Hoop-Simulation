@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Planetary Rings + Exclusive Matching + Ring Letters (City & Country)</title>
+  <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+  <style>
+    body { margin:0; background:#0d1117; color:#c9d1d9; font-family: Arial, sans-serif; overflow:hidden; }
+    #globe { width: 100vw; height: 100vh; }
+    #panel {
+      position:absolute; top:12px; left:12px; z-index:10;
+      width: 760px; max-width: calc(100vw - 24px);
+      background: rgba(22,27,34,0.92);
+      border: 1px solid #30363d; border-radius: 10px;
+      padding: 12px 12px 10px 12px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+    }
+    #panel h2 { margin: 0 0 8px 0; font-size: 16px; color:#58a6ff; }
+    .row { display:flex; gap:8px; margin: 8px 0; flex-wrap:wrap; align-items:center; }
+    .row > * { flex:1; min-width: 120px; }
+    input, button {
+      background:#0b1220; color:#c9d1d9;
+      border:1px solid #30363d; border-radius: 8px;
+      padding: 8px 10px; font-size: 12px;
+      outline:none;
+    }
+    button { cursor:pointer; background:#111b2e; flex:0; min-width: 140px; }
+    button:hover { border-color:#58a6ff; }
+    .small { font-size: 11px; color:#8b949e; line-height: 1.35; }
+    .list {
+      margin-top: 8px;
+      border-top: 1px solid #30363d;
+      padding-top: 8px;
+      max-height: 470px;
+      overflow:auto;
+    }
+    .ringItem {
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      padding: 8px;
+      margin: 8px 0;
+      background: rgba(13,17,23,0.55);
+    }
+    .ringTitle {
+      font-size: 12px; font-weight: bold; margin-bottom: 6px; color:#c9d1d9;
+      display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+    }
+    .swatch { width: 14px; height: 14px; border-radius: 4px; border: 1px solid #30363d; display:inline-block; }
+    .ringMeta { font-size: 11px; color:#8b949e; margin-top: 4px; }
+    .pill {
+      display:inline-block; padding:2px 8px; border-radius:999px;
+      border:1px solid #30363d; margin-right:6px; margin-top:4px;
+      font-size: 11px;
+    }
+    .warn { color:#ffcc66; }
+    .ok { color:#7ee787; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+  </style>
+</head>
+<body>
+  <div id="panel">
+    <h2>Planetary Rings (Exclusive) + Ring Letters (City & Country)</h2>
+
+    <div class="small">
+      ✅ <b>Exclusive rule:</b> a location can appear in <b>only one</b> ring total.<br>
+      ✅ <b>Ring letters:</b> <b>exactly 1 letter per match</b> (word length == #matches). Example: Lima+Algiers+Moscow+Buffalo → city letters <b>LAMB</b>.<br>
+      ✅ Add/remove by city name only (geocoding via OpenStreetMap). Requires internet.
+    </div>
+
+    <div class="row" style="margin-top:10px;">
+      <input id="cityQuery" placeholder="Add city by name (e.g., Doha, Qatar or Toad Suck Arkansas)" />
+      <button id="addCityBtn">Geocode + Add</button>
+      <input id="removeName" placeholder="Remove by exact name (e.g., Doha)" />
+      <button id="removeBtn">Remove</button>
+    </div>
+
+    <div class="row">
+      <label class="small" style="min-width: 100%; margin:0;">
+        Tolerance (°): <span id="tolLabel">0.50</span> • smaller = stricter
+      </label>
+      <input id="tol" type="range" min="0.10" max="3.00" value="0.50" step="0.05"/>
+    </div>
+
+    <div class="row">
+      <label class="small" style="min-width: 100%; margin:0;">
+        Min points per ring: <span id="minLabel">4</span> • higher = stronger patterns only
+      </label>
+      <input id="minPts" type="range" min="3" max="12" value="4" step="1"/>
+    </div>
+
+    <div class="row">
+      <button id="suggestBtn">Suggest Rings</button>
+      <button id="clearRingsBtn">Clear Rings</button>
+      <button id="resetBtn">Reset Defaults</button>
+    </div>
+
+    <div id="status" class="small"></div>
+    <div id="ringsList" class="list"></div>
+  </div>
+
+  <div id="globe"></div>
+
+<script>
+/* =========================
+   Math helpers (spherical)
+   ========================= */
+const d2r = Math.PI / 180;
+const r2d = 180 / Math.PI;
+
+function clamp(x, lo, hi) { return Math.max(lo, Math.min(hi, x)); }
+function toCart(lat, lon) {
+  const l = lat * d2r, g = lon * d2r;
+  return [Math.cos(l)*Math.cos(g), Math.cos(l)*Math.sin(g), Math.sin(l)];
+}
+function norm(v) { return Math.sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]); }
+function dot(a,b) { return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
+function cross(a,b) {
+  return [
+    a[1]*b[2]-a[2]*b[1],
+    a[2]*b[0]-a[0]*b[2],
+    a[0]*b[1]-a[1]*b[0]
+  ];
+}
+function unit(v){
+  const n = norm(v);
+  if (!isFinite(n) || n < 1e-12) return null;
+  return [v[0]/n, v[1]/n, v[2]/n];
+}
+function toLatLon(x,y,z) { return [Math.asin(z)*r2d, Math.atan2(y,x)*r2d]; }
+
+function angularDistPointToGreatCircleDeg(nUnit, pUnit) {
+  const s = Math.abs(dot(nUnit, pUnit));
+  const ang = Math.asin(clamp(s, 0, 1));
+  return ang * r2d;
+}
+
+/* =========================
+   Ring drawing
+   ========================= */
+function generateFullRingFromNormal(nUnit, points=900) {
+  const a = (Math.abs(nUnit[2]) < 0.9) ? [0,0,1] : [0,1,0];
+  const u = unit(cross(nUnit, a));
+  if (!u) return { lats: [], lons: [] };
+  const v = unit(cross(nUnit, u));
+  if (!v) return { lats: [], lons: [] };
+
+  const lats = [], lons = [];
+  for (let i=0; i<=points; i++){
+    const t = (i/points)*2*Math.PI;
+    const ct = Math.cos(t), st = Math.sin(t);
+    const pt = [u[0]*ct + v[0]*st, u[1]*ct + v[1]*st, u[2]*ct + v[2]*st];
+    const [lat, lon] = toLatLon(pt[0], pt[1], pt[2]);
+
+    if (lons.length>0 && Math.abs(lon - lons[lons.length-1]) > 180) {
+      lats.push(null); lons.push(null);
+    }
+    lats.push(lat); lons.push(lon);
+  }
+  return { lats, lons };
+}
+
+/* =========================
+   Defaults (Doha included, Einbeck removed)
+   ========================= */
+const DEFAULT_CITIES = {
+  "Maputo": [-25.9692, 32.5732],
+  "Kabul": [34.5553, 69.2075],
+  "Tashkent": [41.2995, 69.2401],
+  "Arles": [43.6766, 4.6278],
+  "Casablanca": [33.5731, -7.5898],
+  "Accra": [5.6037, -0.1870],
+  "Tallinn": [59.4370, 24.7536],
+  "Lahore": [31.5204, 74.3587],
+  "Lima": [-12.0464, -77.0428],
+  "Kupang": [-10.1772, 123.6070],
+  "Amarillo": [35.2220, -101.8313],
+
+  "Seoul": [37.5665, 126.9780],
+  "Cairo": [30.0444, 31.2357],
+  "Lower Hutt": [-41.2119, 174.9006],
+  "Ankara": [39.9334, 32.8597],
+  "Tbilisi": [41.7151, 44.8271],
+  "Toad Suck": [35.1556, -92.4413],
+  "Tijuana": [32.5149, -117.0382],
+  "Doha": [25.2854, 51.5310],
+  "Moscow": [55.7558, 37.6173],
+
+  "Algiers": [36.7538, 3.0588],
+  "Tampa": [27.9506, -82.4572],
+  "Wichita": [37.6872, -97.3301],
+  "Tierra del Fuego": [-54.8019, -68.3030],
+  "DeKalb": [41.9295, -88.7504],
+  "Montreal": [45.5017, -73.5673],
+  "Queensland": [-20.9176, 142.7028],
+  "Divo": [5.8374, -5.3572],
+  "Copenhagen": [55.6761, 12.5683],
+  "Buffalo": [42.8864, -78.8784],
+
+  "Sucre": [-19.0196, -65.2619],
+  "Quito": [-0.1807, -78.4678],
+
+  "Ile de la Possession": [-46.3986, 51.7583],
+  "Heard Island": [-53.0818, 73.5042],
+  "Ascension Island": [-7.9467, -14.3559],
+
+  "Male": [4.1755, 73.5093],
+  "Nazare": [39.6012, -9.0700],
+  "Antananarivo": [-18.8792, 47.5079],
+  "Babylon": [32.5364, 44.4200],
+  "Dimtu": [6.8167, 37.7833],
+  "Thane": [19.2183, 72.9781],
+  "Iturup": [45.0333, 147.8833],
+  "Yellowknife": [62.4540, -114.3718],
+  "Nome": [64.5011, -165.4064],
+
+  "Eyjafjallajokull": [63.6333, -19.6333]
+};
+
+const DEFAULT_COUNTRIES = {
+  "Maputo":"Mozambique",
+  "Kabul":"Afghanistan",
+  "Tashkent":"Uzbekistan",
+  "Arles":"France",
+  "Casablanca":"Morocco",
+  "Accra":"Ghana",
+  "Tallinn":"Estonia",
+  "Lahore":"Pakistan",
+  "Lima":"Peru",
+  "Kupang":"Indonesia",
+  "Amarillo":"United States",
+
+  "Seoul":"South Korea",
+  "Cairo":"Egypt",
+  "Lower Hutt":"New Zealand",
+  "Ankara":"Turkey",
+  "Tbilisi":"Georgia",
+  "Toad Suck":"United States",
+  "Tijuana":"Mexico",
+  "Doha":"Qatar",
+  "Moscow":"Russia",
+
+  "Algiers":"Algeria",
+  "Tampa":"United States",
+  "Wichita":"United States",
+  "Tierra del Fuego":"Argentina",
+  "DeKalb":"United States",
+  "Montreal":"Canada",
+  "Queensland":"Australia",
+  "Divo":"Côte d’Ivoire",
+  "Copenhagen":"Denmark",
+  "Buffalo":"United States",
+
+  "Sucre":"Bolivia",
+  "Quito":"Ecuador",
+
+  "Ile de la Possession":"French Southern and Antarctic Lands",
+  "Heard Island":"Australia",
+  "Ascension Island":"Saint Helena, Ascension and Tristan da Cunha",
+
+  "Male":"Maldives",
+  "Nazare":"Portugal",
+  "Antananarivo":"Madagascar",
+  "Babylon":"Iraq",
+  "Dimtu":"Ethiopia",
+  "Thane":"India",
+  "Iturup":"Russia",
+  "Yellowknife":"Canada",
+  "Nome":"United States",
+  "Eyjafjallajokull":"Iceland"
+};
+
+let cities = structuredClone(DEFAULT_CITIES);
+let countries = structuredClone(DEFAULT_COUNTRIES);
+
+/* =========================
+   Geocoding (city name -> lat/lon + country)
+   ========================= */
+async function geocodeCity(query) {
+  const url = "https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&q=" + encodeURIComponent(query);
+  const res = await fetch(url, { headers: { "Accept": "application/json" } });
+  if (!res.ok) throw new Error("Geocoding failed (HTTP " + res.status + ")");
+  const data = await res.json();
+  if (!data || !data.length) throw new Error("No results found for: " + query);
+
+  const item = data[0];
+  const lat = Number(item.lat);
+  const lon = Number(item.lon);
+  const addr = item.address || {};
+  const country = addr.country || "";
+  const name =
+    (addr.city || addr.town || addr.village || addr.hamlet || addr.county || item.display_name?.split(",")[0] || query)
+      .trim();
+
+  return { name, lat, lon, country, display: item.display_name || name };
+}
+
+/* =========================
+   Points
+   ========================= */
+function getPointUnits() {
+  return Object.keys(cities).map(name => {
+    const [lat, lon] = cities[name];
+    return { name, lat, lon, p: unit(toCart(lat, lon)), country: (countries[name] || "") };
+  }).filter(x => x.p);
+}
+
+/* =========================
+   Candidate building + exclusive selection
+   ========================= */
+function ringKey(nUnit) {
+  const q = (x)=>Math.round(x*1000);
+  const a = [q(nUnit[0]), q(nUnit[1]), q(nUnit[2])];
+  const b = [-a[0], -a[1], -a[2]];
+  const sa = a.join(","), sb = b.join(",");
+  return (sa < sb) ? sa : sb;
+}
+
+const STRICT = {
+  maxAvgErrFrac: 0.55,
+  maxErrFrac: 0.95,
+  maxCandidates: 450,
+  pairSamples: 12000
+};
+
+function buildCandidatesAll(points, toleranceDeg, minInliers) {
+  const n = points.length;
+  if (n < 3) return [];
+
+  const candidates = [];
+  const seen = new Set();
+
+  const maxPairs = n*(n-1)/2;
+  const samples = Math.min(STRICT.pairSamples, maxPairs);
+
+  for (let s=0; s<samples; s++){
+    const i = Math.floor(Math.random()*n);
+    let j = Math.floor(Math.random()*n);
+    if (j === i) { s--; continue; }
+
+    const nn = unit(cross(points[i].p, points[j].p));
+    if (!nn) continue;
+
+    const key = ringKey(nn);
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    let inliers = [];
+    let errSum = 0;
+    let errMax = 0;
+
+    for (let t=0; t<n; t++){
+      const d = angularDistPointToGreatCircleDeg(nn, points[t].p);
+      if (d <= toleranceDeg) {
+        inliers.push({ name: points[t].name, d, country: points[t].country || "" });
+        errSum += d;
+        errMax = Math.max(errMax, d);
+      }
+    }
+
+    if (inliers.length < minInliers) continue;
+
+    inliers.sort((a,b)=>a.d-b.d);
+    const avgErr = errSum / inliers.length;
+
+    const avgOK = avgErr <= (STRICT.maxAvgErrFrac * toleranceDeg);
+    const maxOK = errMax <= (STRICT.maxErrFrac * toleranceDeg);
+    if (!avgOK || !maxOK) continue;
+
+    candidates.push({ n: nn, inliers, count: inliers.length, avgErr, errMax });
+  }
+
+  candidates.sort((a,b)=>{
+    if (b.count !== a.count) return b.count - a.count;
+    if (a.avgErr !== b.avgErr) return a.avgErr - b.avgErr;
+    return a.errMax - b.errMax;
+  });
+
+  return candidates.slice(0, STRICT.maxCandidates);
+}
+
+const FIXED_RING_COUNT = 6;
+
+function pickRingsExclusive(points, toleranceDeg, minInliers) {
+  const candidates = buildCandidatesAll(points, toleranceDeg, minInliers);
+  const used = new Set();
+  const picked = [];
+
+  for (let iter=0; iter<FIXED_RING_COUNT; iter++){
+    let bestIdx = -1;
+
+    for (let c=0; c<candidates.length; c++){
+      const cand = candidates[c];
+      let overlaps = false;
+      for (const x of cand.inliers) {
+        if (used.has(x.name)) { overlaps = true; break; }
+      }
+      if (overlaps) continue;
+      bestIdx = c;
+      break;
+    }
+
+    if (bestIdx === -1) break;
+
+    const chosen = candidates[bestIdx];
+    picked.push(chosen);
+    chosen.inliers.forEach(x => used.add(x.name));
+  }
+
+  return picked;
+}
+
+/* =========================
+   Ring letters (always show BOTH)
+   ========================= */
+function initialLetter(s) {
+  const m = (s || "").trim().toUpperCase().match(/[A-Z]/);
+  return m ? m[0] : "?";
+}
+
+function ringLettersCity(ring) {
+  return ring.inliers.map(x => initialLetter(x.name)).join("").replace(/[^A-Z?]/g, "");
+}
+function ringLettersCountry(ring) {
+  return ring.inliers.map(x => initialLetter(x.country)).join("").replace(/[^A-Z?]/g, "");
+}
+function pillsFromLetters(letters) {
+  return letters.split("").map(ch => `<span class="pill mono">${ch}</span>`).join("");
+}
+
+/* =========================
+   Rendering
+   ========================= */
+let currentRings = [];
+const ringColors = ["#ff2222","#00ff00","#ffff00","#ff00ff","#39c5cf","#ffffff","#ff8800","#00ccff","#cc66ff","#66ff99"];
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+  }[c]));
+}
+
+function render() {
+  const points = getPointUnits();
+  const names = points.map(x=>x.name);
+  const lats  = points.map(x=>x.lat);
+  const lons  = points.map(x=>x.lon);
+
+  const traces = [];
+
+  currentRings.forEach((ring, idx) => {
+    const col = ringColors[idx % ringColors.length];
+    const curve = generateFullRingFromNormal(ring.n, 900);
+    traces.push({
+      type: "scattergeo",
+      mode: "lines",
+      lon: curve.lons,
+      lat: curve.lats,
+      line: { width: 3, color: col },
+      opacity: 0.65,
+      hoverinfo: "none"
+    });
+  });
+
+  traces.push({
+    type: "scattergeo",
+    mode: "markers+text",
+    lon: lons,
+    lat: lats,
+    text: names,
+    textposition: "top right",
+    hoverinfo: "text",
+    marker: { size: 6, color: "#ffffff", line: { width: 1, color: "#000000" } },
+    textfont: { color: "#ffffff", size: 11 }
+  });
+
+  Plotly.newPlot("globe", traces, {
+    geo: {
+      projection: { type: "orthographic", rotation: { lon: -40, lat: 40, roll: 0 } },
+      showocean: true, oceancolor: "#0d1117",
+      showland: true, landcolor: "#21262d",
+      showcountries: true, countrycolor: "#30363d",
+      showcoastlines: true, coastlinecolor: "#30363d",
+      bgcolor: "#0d1117"
+    },
+    paper_bgcolor: "#0d1117",
+    margin: { l:0, r:0, t:0, b:0 },
+    showlegend: false
+  }, { responsive: true });
+}
+
+function renderRingsList() {
+  const toleranceDeg = Number(document.getElementById("tol").value);
+  const minInliers = Number(document.getElementById("minPts").value);
+
+  const list = document.getElementById("ringsList");
+  list.innerHTML = "";
+
+  if (currentRings.length === 0) {
+    list.innerHTML = `<div class="small warn">No rings yet. Click “Suggest Rings”.</div>`;
+    return;
+  }
+
+  for (let idx=0; idx<currentRings.length; idx++){
+    const ring = currentRings[idx];
+    const col = ringColors[idx % ringColors.length];
+
+    const matches = ring.inliers.map(x=>x.name).join(", ");
+    const countriesStr = ring.inliers.map(x=>x.country).filter(Boolean).join(", ");
+
+    const cityLetters = ringLettersCity(ring);
+    const countryLetters = ringLettersCountry(ring);
+
+    const card = document.createElement("div");
+    card.className = "ringItem";
+    card.innerHTML = `
+      <div class="ringTitle">
+        <span class="swatch" style="background:${col};"></span>
+        Ring ${idx+1}
+        <span class="pill">${ring.count} pts</span>
+        <span class="pill">avg ${ring.avgErr.toFixed(2)}°</span>
+        <span class="pill">max ${ring.errMax.toFixed(2)}°</span>
+        <span class="pill">overlap: 0</span>
+      </div>
+
+      <div class="ringMeta"><b>Matches:</b> ${escapeHtml(matches)}</div>
+      <div class="ringMeta"><b>Countries:</b> ${escapeHtml(countriesStr || "(unknown)")}</div>
+
+      <div class="ringMeta">
+        <b>Ring letters (City, 1 per match):</b>
+        ${pillsFromLetters(cityLetters)}
+        <span class="pill">${cityLetters.length} letters</span>
+        <span class="pill mono">${cityLetters}</span>
+      </div>
+
+      <div class="ringMeta">
+        <b>Ring letters (Country, 1 per match):</b>
+        ${pillsFromLetters(countryLetters)}
+        <span class="pill">${countryLetters.length} letters</span>
+        <span class="pill mono">${countryLetters}</span>
+      </div>
+
+      <div class="ringMeta small" style="margin-top:6px;">
+        Gate: ≥${minInliers} points • Fit: avg ≤ ${(STRICT.maxAvgErrFrac*100).toFixed(0)}% of tol (${(STRICT.maxAvgErrFrac*toleranceDeg).toFixed(2)}°),
+        max ≤ ${(STRICT.maxErrFrac*100).toFixed(0)}% of tol (${(STRICT.maxErrFrac*toleranceDeg).toFixed(2)}°).
+      </div>
+    `;
+    list.appendChild(card);
+  }
+}
+
+/* =========================
+   UI wiring
+   ========================= */
+const tolSlider = document.getElementById("tol");
+const tolLabel  = document.getElementById("tolLabel");
+const minPtsSlider = document.getElementById("minPts");
+const minLabel  = document.getElementById("minLabel");
+const status    = document.getElementById("status");
+
+function setLabels() {
+  tolLabel.textContent = Number(tolSlider.value).toFixed(2);
+  minLabel.textContent = String(minPtsSlider.value);
+}
+tolSlider.addEventListener("input", setLabels);
+minPtsSlider.addEventListener("input", setLabels);
+
+document.getElementById("addCityBtn").addEventListener("click", async () => {
+  const q = document.getElementById("cityQuery").value.trim();
+  if (!q) { status.textContent = "Type a city query first."; return; }
+  status.innerHTML = `<span class="warn">Geocoding…</span> ${escapeHtml(q)}`;
+
+  try {
+    const g = await geocodeCity(q);
+    cities[g.name] = [g.lat, g.lon];
+    if (g.country) countries[g.name] = g.country;
+
+    status.innerHTML =
+      `<span class="ok">Added:</span> ${escapeHtml(g.name)} (${g.lat.toFixed(4)}, ${g.lon.toFixed(4)})` +
+      (g.country ? ` • ${escapeHtml(g.country)}` : ``);
+
+    // dataset changed; clear rings so exclusivity isn't misleading
+    currentRings = [];
+    render();
+    renderRingsList();
+  } catch (e) {
+    status.innerHTML = `<span class="warn">${escapeHtml(e.message || String(e))}</span>`;
+  }
+});
+
+document.getElementById("removeBtn").addEventListener("click", () => {
+  const name = document.getElementById("removeName").value.trim();
+  if (!name) { status.textContent = "Type the exact location name to remove."; return; }
+
+  if (cities[name]) {
+    delete cities[name];
+    delete countries[name];
+    status.innerHTML = `<span class="ok">Removed:</span> ${escapeHtml(name)}`;
+
+    // dataset changed; clear rings
+    currentRings = [];
+    render();
+    renderRingsList();
+  } else {
+    status.innerHTML = `<span class="warn">Not found:</span> ${escapeHtml(name)} (must match exactly as shown on the map)`;
+  }
+});
+
+document.getElementById("suggestBtn").addEventListener("click", () => {
+  const points = getPointUnits();
+  const toleranceDeg = Number(tolSlider.value);
+  const minInliers = Number(minPtsSlider.value);
+
+  if (points.length < 3) {
+    status.textContent = "Need at least 3 locations to suggest rings.";
+    return;
+  }
+
+  status.textContent = "Suggesting strongest non-overlapping rings…";
+  currentRings = pickRingsExclusive(points, toleranceDeg, minInliers);
+
+  if (currentRings.length === 0) {
+    status.innerHTML = `<span class="warn">No non-overlapping rings met the threshold.</span> Try (1) increase tolerance slightly, or (2) lower min points per ring.`;
+  } else {
+    const usedCount = currentRings.reduce((s,r)=>s+r.count,0);
+    status.innerHTML = `<span class="ok">Generated ${currentRings.length}</span> ring(s) (exclusive-use) at tol ${toleranceDeg.toFixed(2)}°, min ${minInliers} pts/ring. Using ${usedCount} unique locations.`;
+  }
+
+  render();
+  renderRingsList();
+});
+
+document.getElementById("clearRingsBtn").addEventListener("click", () => {
+  currentRings = [];
+  status.textContent = "Cleared rings.";
+  render();
+  renderRingsList();
+});
+
+document.getElementById("resetBtn").addEventListener("click", () => {
+  cities = structuredClone(DEFAULT_CITIES);
+  countries = structuredClone(DEFAULT_COUNTRIES);
+  currentRings = [];
+  status.textContent = "Reset defaults.";
+  render();
+  renderRingsList();
+});
+
+setLabels();
+render();
+renderRingsList();
+</script>
+</body>
+</html>
