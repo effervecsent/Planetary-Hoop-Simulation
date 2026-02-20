@@ -1,0 +1,947 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Planetary Rings + Auto Optimize Convergence</title>
+  <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+  <style>
+    body { margin:0; background:#0d1117; color:#c9d1d9; font-family: Arial, sans-serif; overflow:hidden; }
+    #globe { width: 100vw; height: 100vh; }
+    #panel {
+      position:absolute; top:12px; left:12px; z-index:10;
+      width: 920px; max-width: calc(100vw - 24px);
+      background: rgba(22,27,34,0.92);
+      border: 1px solid #30363d; border-radius: 10px;
+      padding: 12px 12px 10px 12px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+    }
+    #panel h2 { margin: 0 0 8px 0; font-size: 16px; color:#58a6ff; }
+    .row { display:flex; gap:8px; margin: 8px 0; flex-wrap:wrap; align-items:center; }
+    .row > * { flex:1; min-width: 120px; }
+    input, button {
+      background:#0b1220; color:#c9d1d9;
+      border:1px solid #30363d; border-radius: 8px;
+      padding: 8px 10px; font-size: 12px;
+      outline:none;
+    }
+    button { cursor:pointer; background:#111b2e; flex:0; min-width: 180px; }
+    button:hover { border-color:#58a6ff; }
+    .small { font-size: 11px; color:#8b949e; line-height: 1.35; }
+    .list {
+      margin-top: 8px;
+      border-top: 1px solid #30363d;
+      padding-top: 8px;
+      max-height: 520px;
+      overflow:auto;
+    }
+    .ringItem {
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      padding: 8px;
+      margin: 8px 0;
+      background: rgba(13,17,23,0.55);
+    }
+    .ringTitle {
+      font-size: 12px; font-weight: bold; margin-bottom: 6px; color:#c9d1d9;
+      display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+    }
+    .swatch { width: 14px; height: 14px; border-radius: 4px; border: 1px solid #30363d; display:inline-block; }
+    .ringMeta { font-size: 11px; color:#8b949e; margin-top: 4px; }
+    .pill {
+      display:inline-block; padding:2px 8px; border-radius:999px;
+      border:1px solid #30363d; margin-right:6px; margin-top:4px;
+      font-size: 11px;
+    }
+    .warn { color:#ffcc66; }
+    .ok { color:#7ee787; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+    .split { display:grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    @media (max-width: 980px) { .split { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div id="panel">
+    <h2>Planetary Rings — Ideal Cover + Convergence + AUTO OPTIMIZE</h2>
+
+    <div class="small">
+      ✅ Exclusive rings (no location appears in 2+ rings).<br>
+      ✅ “Convergence” means: all rings pass near a single point (⭐ shown).<br>
+      ✅ AUTO OPTIMIZE sweeps tolerances & gates and selects the best-scoring solution (tightest convergence with strong preference for full coverage).<br>
+      ✅ Shows ring letters for City and Country (1 letter per matched location).
+    </div>
+
+    <div class="row" style="margin-top:10px;">
+      <input id="cityQuery" placeholder="Add city by name (e.g., Doha, Qatar or Toad Suck Arkansas)" />
+      <button id="addCityBtn">Geocode + Add</button>
+      <input id="removeName" placeholder="Remove by exact name (e.g., Doha)" />
+      <button id="removeBtn">Remove</button>
+    </div>
+
+    <div class="split">
+      <div>
+        <label class="small" style="display:block; margin-top:6px;">
+          Ring tolerance (°): <span id="tolLabel">0.50</span>
+        </label>
+        <input id="tol" type="range" min="0.10" max="3.00" value="0.50" step="0.05"/>
+      </div>
+      <div>
+        <label class="small" style="display:block; margin-top:6px;">
+          Min points per ring: <span id="minLabel">4</span>
+        </label>
+        <input id="minPts" type="range" min="3" max="12" value="4" step="1"/>
+      </div>
+    </div>
+
+    <div class="split">
+      <div>
+        <label class="small" style="display:block; margin-top:6px;">
+          Search attempts per setting: <span id="attLabel">140</span>
+        </label>
+        <input id="attempts" type="range" min="40" max="1200" value="140" step="20"/>
+      </div>
+      <div>
+        <label class="small" style="display:block; margin-top:6px;">
+          AUTO optimize effort: <span id="effLabel">Medium</span>
+        </label>
+        <input id="effort" type="range" min="1" max="3" value="2" step="1"/>
+      </div>
+    </div>
+
+    <div class="row">
+      <button id="suggestBtn">Suggest Rings (Greedy)</button>
+      <button id="idealBtn">Find Ideal Cover + Convergence</button>
+      <button id="autoBtn">AUTO OPTIMIZE (All Factors Sweep)</button>
+      <button id="clearBtn">Clear</button>
+      <button id="resetBtn">Reset Defaults</button>
+    </div>
+
+    <div id="status" class="small"></div>
+    <div id="ringsList" class="list"></div>
+  </div>
+
+  <div id="globe"></div>
+
+<script>
+/* =========================
+   Math helpers (spherical)
+   ========================= */
+const d2r = Math.PI / 180;
+const r2d = 180 / Math.PI;
+
+function clamp(x, lo, hi) { return Math.max(lo, Math.min(hi, x)); }
+function toCart(lat, lon) {
+  const l = lat * d2r, g = lon * d2r;
+  return [Math.cos(l)*Math.cos(g), Math.cos(l)*Math.sin(g), Math.sin(l)];
+}
+function norm(v) { return Math.sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]); }
+function dot(a,b) { return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
+function cross(a,b) {
+  return [
+    a[1]*b[2]-a[2]*b[1],
+    a[2]*b[0]-a[0]*b[2],
+    a[0]*b[1]-a[1]*b[0]
+  ];
+}
+function unit(v){
+  const n = norm(v);
+  if (!isFinite(n) || n < 1e-12) return null;
+  return [v[0]/n, v[1]/n, v[2]/n];
+}
+function toLatLon(x,y,z) { return [Math.asin(z)*r2d, Math.atan2(y,x)*r2d]; }
+
+function angularDistPointToGreatCircleDeg(nUnit, pUnit) {
+  const s = Math.abs(dot(nUnit, pUnit));
+  const ang = Math.asin(clamp(s, 0, 1));
+  return ang * r2d;
+}
+
+/* =========================
+   Ring drawing
+   ========================= */
+function generateFullRingFromNormal(nUnit, points=900) {
+  const a = (Math.abs(nUnit[2]) < 0.9) ? [0,0,1] : [0,1,0];
+  const u = unit(cross(nUnit, a));
+  if (!u) return { lats: [], lons: [] };
+  const v = unit(cross(nUnit, u));
+  if (!v) return { lats: [], lons: [] };
+
+  const lats = [], lons = [];
+  for (let i=0; i<=points; i++){
+    const t = (i/points)*2*Math.PI;
+    const ct = Math.cos(t), st = Math.sin(t);
+    const pt = [u[0]*ct + v[0]*st, u[1]*ct + v[1]*st, u[2]*ct + v[2]*st];
+    const [lat, lon] = toLatLon(pt[0], pt[1], pt[2]);
+    if (lons.length>0 && Math.abs(lon - lons[lons.length-1]) > 180) {
+      lats.push(null); lons.push(null);
+    }
+    lats.push(lat); lons.push(lon);
+  }
+  return { lats, lons };
+}
+
+/* =========================
+   Defaults
+   ========================= */
+const DEFAULT_CITIES = {
+  "Maputo": [-25.9692, 32.5732],
+  "Kabul": [34.5553, 69.2075],
+  "Tashkent": [41.2995, 69.2401],
+  "Arles": [43.6766, 4.6278],
+  "Casablanca": [33.5731, -7.5898],
+  "Accra": [5.6037, -0.1870],
+  "Tallinn": [59.4370, 24.7536],
+  "Lahore": [31.5204, 74.3587],
+  "Lima": [-12.0464, -77.0428],
+  "Kupang": [-10.1772, 123.6070],
+  "Amarillo": [35.2220, -101.8313],
+
+  "Seoul": [37.5665, 126.9780],
+  "Cairo": [30.0444, 31.2357],
+  "Lower Hutt": [-41.2119, 174.9006],
+  "Ankara": [39.9334, 32.8597],
+  "Tbilisi": [41.7151, 44.8271],
+  "Toad Suck": [35.1556, -92.4413],
+  "Tijuana": [32.5149, -117.0382],
+  "Doha": [25.2854, 51.5310],
+  "Moscow": [55.7558, 37.6173],
+
+  "Algiers": [36.7538, 3.0588],
+  "Tampa": [27.9506, -82.4572],
+  "Wichita": [37.6872, -97.3301],
+  "Tierra del Fuego": [-54.8019, -68.3030],
+  "DeKalb": [41.9295, -88.7504],
+  "Montreal": [45.5017, -73.5673],
+  "Queensland": [-20.9176, 142.7028],
+  "Divo": [5.8374, -5.3572],
+  "Copenhagen": [55.6761, 12.5683],
+  "Buffalo": [42.8864, -78.8784],
+
+  "Sucre": [-19.0196, -65.2619],
+  "Quito": [-0.1807, -78.4678],
+
+  "Ile de la Possession": [-46.3986, 51.7583],
+  "Heard Island": [-53.0818, 73.5042],
+  "Ascension Island": [-7.9467, -14.3559],
+
+  "Male": [4.1755, 73.5093],
+  "Nazare": [39.6012, -9.0700],
+  "Antananarivo": [-18.8792, 47.5079],
+  "Babylon": [32.5364, 44.4200],
+  "Dimtu": [6.8167, 37.7833],
+  "Thane": [19.2183, 72.9781],
+  "Iturup": [45.0333, 147.8833],
+  "Yellowknife": [62.4540, -114.3718],
+  "Nome": [64.5011, -165.4064],
+
+  "Eyjafjallajokull": [63.6333, -19.6333]
+};
+
+const DEFAULT_COUNTRIES = {
+  "Maputo":"Mozambique","Kabul":"Afghanistan","Tashkent":"Uzbekistan","Arles":"France","Casablanca":"Morocco","Accra":"Ghana",
+  "Tallinn":"Estonia","Lahore":"Pakistan","Lima":"Peru","Kupang":"Indonesia","Amarillo":"United States",
+  "Seoul":"South Korea","Cairo":"Egypt","Lower Hutt":"New Zealand","Ankara":"Turkey","Tbilisi":"Georgia","Toad Suck":"United States",
+  "Tijuana":"Mexico","Doha":"Qatar","Moscow":"Russia",
+  "Algiers":"Algeria","Tampa":"United States","Wichita":"United States","Tierra del Fuego":"Argentina","DeKalb":"United States",
+  "Montreal":"Canada","Queensland":"Australia","Divo":"Côte d’Ivoire","Copenhagen":"Denmark","Buffalo":"United States",
+  "Sucre":"Bolivia","Quito":"Ecuador",
+  "Ile de la Possession":"French Southern and Antarctic Lands","Heard Island":"Australia","Ascension Island":"Saint Helena, Ascension and Tristan da Cunha",
+  "Male":"Maldives","Nazare":"Portugal","Antananarivo":"Madagascar","Babylon":"Iraq","Dimtu":"Ethiopia","Thane":"India",
+  "Iturup":"Russia","Yellowknife":"Canada","Nome":"United States","Eyjafjallajokull":"Iceland"
+};
+
+let cities = structuredClone(DEFAULT_CITIES);
+let countries = structuredClone(DEFAULT_COUNTRIES);
+
+/* =========================
+   Geocoding
+   ========================= */
+async function geocodeCity(query) {
+  const url = "https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&q=" + encodeURIComponent(query);
+  const res = await fetch(url, { headers: { "Accept": "application/json" } });
+  if (!res.ok) throw new Error("Geocoding failed (HTTP " + res.status + ")");
+  const data = await res.json();
+  if (!data || !data.length) throw new Error("No results found for: " + query);
+
+  const item = data[0];
+  const lat = Number(item.lat);
+  const lon = Number(item.lon);
+  const addr = item.address || {};
+  const country = addr.country || "";
+  const name =
+    (addr.city || addr.town || addr.village || addr.hamlet || addr.county || item.display_name?.split(",")[0] || query)
+      .trim();
+
+  return { name, lat, lon, country };
+}
+
+/* =========================
+   Points
+   ========================= */
+function getPointUnits() {
+  return Object.keys(cities).map(name => {
+    const [lat, lon] = cities[name];
+    return { name, lat, lon, p: unit(toCart(lat, lon)), country: (countries[name] || "") };
+  }).filter(x => x.p);
+}
+
+/* =========================
+   Candidate rings
+   ========================= */
+function ringKey(nUnit) {
+  const q = (x)=>Math.round(x*1000);
+  const a = [q(nUnit[0]), q(nUnit[1]), q(nUnit[2])];
+  const b = [-a[0], -a[1], -a[2]];
+  const sa = a.join(","), sb = b.join(",");
+  return (sa < sb) ? sa : sb;
+}
+
+const STRICT = {
+  maxAvgErrFrac: 0.55,
+  maxErrFrac: 0.95,
+  maxCandidates: 700,
+  pairSamples: 22000
+};
+
+function buildCandidatesAll(points, toleranceDeg, minInliers) {
+  const n = points.length;
+  if (n < 3) return [];
+
+  const candidates = [];
+  const seen = new Set();
+
+  const maxPairs = n*(n-1)/2;
+  const samples = Math.min(STRICT.pairSamples, maxPairs);
+
+  for (let s=0; s<samples; s++){
+    const i = Math.floor(Math.random()*n);
+    let j = Math.floor(Math.random()*n);
+    if (j === i) { s--; continue; }
+
+    const nn = unit(cross(points[i].p, points[j].p));
+    if (!nn) continue;
+
+    const key = ringKey(nn);
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    let inliers = [];
+    let errSum = 0;
+    let errMax = 0;
+
+    for (let t=0; t<n; t++){
+      const d = angularDistPointToGreatCircleDeg(nn, points[t].p);
+      if (d <= toleranceDeg) {
+        inliers.push({ name: points[t].name, d, country: points[t].country || "" });
+        errSum += d;
+        errMax = Math.max(errMax, d);
+      }
+    }
+
+    if (inliers.length < minInliers) continue;
+
+    inliers.sort((a,b)=>a.d-b.d);
+    const avgErr = errSum / inliers.length;
+
+    const avgOK = avgErr <= (STRICT.maxAvgErrFrac * toleranceDeg);
+    const maxOK = errMax <= (STRICT.maxErrFrac * toleranceDeg);
+    if (!avgOK || !maxOK) continue;
+
+    candidates.push({ n: nn, inliers, count: inliers.length, avgErr, errMax });
+  }
+
+  candidates.sort((a,b)=>{
+    if (b.count !== a.count) return b.count - a.count;
+    if (a.avgErr !== b.avgErr) return a.avgErr - b.avgErr;
+    return a.errMax - b.errMax;
+  });
+
+  return candidates.slice(0, STRICT.maxCandidates);
+}
+
+/* =========================
+   Convergence point for rings
+   ========================= */
+function matAddOuter(S, n) {
+  S[0][0] += n[0]*n[0]; S[0][1] += n[0]*n[1]; S[0][2] += n[0]*n[2];
+  S[1][0] += n[1]*n[0]; S[1][1] += n[1]*n[1]; S[1][2] += n[1]*n[2];
+  S[2][0] += n[2]*n[0]; S[2][1] += n[2]*n[1]; S[2][2] += n[2]*n[2];
+}
+function matVec(S, v) {
+  return [
+    S[0][0]*v[0] + S[0][1]*v[1] + S[0][2]*v[2],
+    S[1][0]*v[0] + S[1][1]*v[1] + S[1][2]*v[2],
+    S[2][0]*v[0] + S[2][1]*v[1] + S[2][2]*v[2]
+  ];
+}
+function vnorm(v){ return Math.sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]); }
+function vunit(v){
+  const n = vnorm(v);
+  if (!isFinite(n) || n < 1e-12) return null;
+  return [v[0]/n, v[1]/n, v[2]/n];
+}
+function randUnit(){
+  const u = Math.random()*2 - 1;
+  const t = Math.random()*2*Math.PI;
+  const s = Math.sqrt(1-u*u);
+  return [s*Math.cos(t), s*Math.sin(t), u];
+}
+function objectiveS(S, c) {
+  const Sc = matVec(S, c);
+  return dot(c, Sc);
+}
+function smallestEigenVectorApprox(S, tries=60, iters=90) {
+  let bestC = null;
+  let bestVal = Infinity;
+  for (let k=0; k<tries; k++){
+    let c = randUnit();
+    for (let t=0; t<iters; t++){
+      const Sc = matVec(S, c);
+      const step = 0.35;
+      c = vunit([c[0] - step*Sc[0], c[1] - step*Sc[1], c[2] - step*Sc[2]]);
+      if (!c) break;
+    }
+    if (!c) continue;
+    const val = objectiveS(S, c);
+    if (val < bestVal) { bestVal = val; bestC = c; }
+  }
+  return bestC;
+}
+function convergenceStats(rings) {
+  if (!rings || rings.length < 2) return null;
+  const S = [[0,0,0],[0,0,0],[0,0,0]];
+  rings.forEach(r => matAddOuter(S, r.n));
+  const c = smallestEigenVectorApprox(S, 70, 95);
+  if (!c) return null;
+
+  const misses = rings.map(r => Math.asin(clamp(Math.abs(dot(r.n, c)), 0, 1))*r2d);
+  const maxMiss = Math.max(...misses);
+  const rmsMiss = Math.sqrt(misses.reduce((s,x)=>s+x*x,0)/misses.length);
+  const [lat, lon] = toLatLon(c[0], c[1], c[2]);
+  const [alat, alon] = toLatLon(-c[0], -c[1], -c[2]);
+
+  return { c, lat, lon, alat, alon, maxMiss, rmsMiss, misses };
+}
+
+/* =========================
+   Ideal cover search (randomized greedy)
+   ========================= */
+function findIdealCover(points, toleranceDeg, minInliers, attempts=140) {
+  const allNames = points.map(p=>p.name);
+  const allSet = new Set(allNames);
+
+  const candidates = buildCandidatesAll(points, toleranceDeg, minInliers);
+  if (candidates.length === 0) return null;
+
+  candidates.forEach(r => r._set = new Set(r.inliers.map(x=>x.name)));
+
+  function uncoveredCount(used) {
+    let cnt = 0;
+    for (const n of allSet) if (!used.has(n)) cnt++;
+    return cnt;
+  }
+
+  let best = null;
+
+  for (let a=0; a<attempts; a++){
+    const pool = candidates.slice();
+    pool.sort((r1,r2)=>{
+      const s1 = (r1.count*1000) - (r1.avgErr*120) + (Math.random()*5);
+      const s2 = (r2.count*1000) - (r2.avgErr*120) + (Math.random()*5);
+      return s2 - s1;
+    });
+
+    const used = new Set();
+    const chosen = [];
+
+    while (true) {
+      let bestIdx = -1;
+      let bestGain = 0;
+
+      for (let i=0; i<pool.length; i++){
+        const r = pool[i];
+        let ok = true;
+        for (const nm of r._set) { if (used.has(nm)) { ok=false; break; } }
+        if (!ok) continue;
+
+        const gain = r._set.size;
+        if (gain > bestGain) { bestGain = gain; bestIdx = i; }
+      }
+
+      if (bestIdx === -1) break;
+      const take = pool.splice(bestIdx,1)[0];
+      chosen.push(take);
+      for (const nm of take._set) used.add(nm);
+
+      if (used.size === allSet.size) break;
+    }
+
+    const uncovered = uncoveredCount(used);
+    const conv = convergenceStats(chosen);
+
+    const cand = { rings: chosen, uncovered, conv, tol: toleranceDeg, minPts: minInliers };
+
+    if (!best) {
+      best = cand;
+    } else {
+      // When searching "best convergence", we still heavily reward coverage.
+      // Comparator: 1) uncovered, 2) maxMiss, 3) rmsMiss, 4) more used points
+      const b = best;
+
+      const cm = cand.conv ? cand.conv.maxMiss : Infinity;
+      const bm = b.conv ? b.conv.maxMiss : Infinity;
+      const cr = cand.conv ? cand.conv.rmsMiss : Infinity;
+      const br = b.conv ? b.conv.rmsMiss : Infinity;
+      const cu = cand.uncovered;
+      const bu = b.uncovered;
+      const cUsed = cand.rings.reduce((s,r)=>s+r.count,0);
+      const bUsed = b.rings.reduce((s,r)=>s+r.count,0);
+
+      if (cu < bu) best = cand;
+      else if (cu === bu) {
+        if (cm < bm) best = cand;
+        else if (cm === bm) {
+          if (cr < br) best = cand;
+          else if (cr === br) {
+            if (cUsed > bUsed) best = cand;
+          }
+        }
+      }
+    }
+  }
+
+  return best;
+}
+
+/* =========================
+   Ring letters
+   ========================= */
+function initialLetter(s) {
+  const m = (s || "").trim().toUpperCase().match(/[A-Z]/);
+  return m ? m[0] : "?";
+}
+function ringLettersCity(ring) { return ring.inliers.map(x => initialLetter(x.name)).join("").replace(/[^A-Z?]/g, ""); }
+function ringLettersCountry(ring) { return ring.inliers.map(x => initialLetter(x.country)).join("").replace(/[^A-Z?]/g, ""); }
+function pillsFromLetters(letters) { return letters.split("").map(ch => `<span class="pill mono">${ch}</span>`).join(""); }
+
+/* =========================
+   State + rendering
+   ========================= */
+let current = { rings: [], conv: null, uncovered: null, meta: null };
+const ringColors = ["#ff2222","#00ff00","#ffff00","#ff00ff","#39c5cf","#ffffff","#ff8800","#00ccff","#cc66ff","#66ff99"];
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+  }[c]));
+}
+
+function renderGlobe() {
+  const points = getPointUnits();
+  const names = points.map(x=>x.name);
+  const lats  = points.map(x=>x.lat);
+  const lons  = points.map(x=>x.lon);
+
+  const traces = [];
+
+  current.rings.forEach((ring, idx) => {
+    const col = ringColors[idx % ringColors.length];
+    const curve = generateFullRingFromNormal(ring.n, 900);
+    traces.push({
+      type: "scattergeo",
+      mode: "lines",
+      lon: curve.lons,
+      lat: curve.lats,
+      line: { width: 3, color: col },
+      opacity: 0.65,
+      hoverinfo: "none"
+    });
+  });
+
+  if (current.conv) {
+    traces.push({
+      type: "scattergeo",
+      mode: "markers+text",
+      lon: [current.conv.lon],
+      lat: [current.conv.lat],
+      text: ["⭐ Convergence"],
+      textposition: "bottom center",
+      hoverinfo: "text",
+      marker: { size: 10, symbol: "star", color: "#ffcc66", line: { width: 1, color: "#000000" } },
+      textfont: { color: "#ffcc66", size: 12 }
+    });
+    traces.push({
+      type: "scattergeo",
+      mode: "markers+text",
+      lon: [current.conv.alon],
+      lat: [current.conv.alat],
+      text: ["⭐ Antipode"],
+      textposition: "bottom center",
+      hoverinfo: "text",
+      marker: { size: 8, symbol: "star", color: "#8b949e", line: { width: 1, color: "#000000" } },
+      textfont: { color: "#8b949e", size: 11 }
+    });
+  }
+
+  traces.push({
+    type: "scattergeo",
+    mode: "markers+text",
+    lon: lons,
+    lat: lats,
+    text: names,
+    textposition: "top right",
+    hoverinfo: "text",
+    marker: { size: 6, color: "#ffffff", line: { width: 1, color: "#000000" } },
+    textfont: { color: "#ffffff", size: 11 }
+  });
+
+  Plotly.newPlot("globe", traces, {
+    geo: {
+      projection: { type: "orthographic", rotation: { lon: -40, lat: 40, roll: 0 } },
+      showocean: true, oceancolor: "#0d1117",
+      showland: true, landcolor: "#21262d",
+      showcountries: true, countrycolor: "#30363d",
+      showcoastlines: true, coastlinecolor: "#30363d",
+      bgcolor: "#0d1117"
+    },
+    paper_bgcolor: "#0d1117",
+    margin: { l:0, r:0, t:0, b:0 },
+    showlegend: false
+  }, { responsive: true });
+}
+
+function renderRingsList() {
+  const list = document.getElementById("ringsList");
+  list.innerHTML = "";
+
+  if (!current.rings.length) {
+    list.innerHTML = `<div class="small warn">No rings yet.</div>`;
+    return;
+  }
+
+  current.rings.forEach((ring, idx) => {
+    const col = ringColors[idx % ringColors.length];
+    const matches = ring.inliers.map(x=>x.name).join(", ");
+    const countriesStr = ring.inliers.map(x=>x.country).filter(Boolean).join(", ");
+
+    const cityLetters = ringLettersCity(ring);
+    const countryLetters = ringLettersCountry(ring);
+
+    const card = document.createElement("div");
+    card.className = "ringItem";
+    card.innerHTML = `
+      <div class="ringTitle">
+        <span class="swatch" style="background:${col};"></span>
+        Ring ${idx+1}
+        <span class="pill">${ring.count} pts</span>
+        <span class="pill">avg ${ring.avgErr.toFixed(2)}°</span>
+        <span class="pill">max ${ring.errMax.toFixed(2)}°</span>
+        <span class="pill">overlap: 0</span>
+      </div>
+
+      <div class="ringMeta"><b>Matches:</b> ${escapeHtml(matches)}</div>
+      <div class="ringMeta"><b>Countries:</b> ${escapeHtml(countriesStr || "(unknown)")}</div>
+
+      <div class="ringMeta">
+        <b>Ring letters (City):</b>
+        ${pillsFromLetters(cityLetters)}
+        <span class="pill">${cityLetters.length} letters</span>
+        <span class="pill mono">${cityLetters}</span>
+      </div>
+
+      <div class="ringMeta">
+        <b>Ring letters (Country):</b>
+        ${pillsFromLetters(countryLetters)}
+        <span class="pill">${countryLetters.length} letters</span>
+        <span class="pill mono">${countryLetters}</span>
+      </div>
+    `;
+    list.appendChild(card);
+  });
+}
+
+/* =========================
+   Greedy ring suggestion
+   ========================= */
+const FIXED_RING_COUNT = 6;
+function pickRingsExclusiveGreedy(points, toleranceDeg, minInliers) {
+  const candidates = buildCandidatesAll(points, toleranceDeg, minInliers);
+  const used = new Set();
+  const picked = [];
+
+  for (let iter=0; iter<FIXED_RING_COUNT; iter++){
+    let bestIdx = -1;
+    for (let c=0; c<candidates.length; c++){
+      const cand = candidates[c];
+      let overlaps = false;
+      for (const x of cand.inliers) if (used.has(x.name)) { overlaps=true; break; }
+      if (overlaps) continue;
+      bestIdx = c; break;
+    }
+    if (bestIdx === -1) break;
+    const chosen = candidates[bestIdx];
+    picked.push(chosen);
+    chosen.inliers.forEach(x => used.add(x.name));
+  }
+  return picked;
+}
+
+/* =========================
+   AUTO OPTIMIZE (sweep "all factors")
+   ========================= */
+function effortConfig(level) {
+  // level 1: fast, 2: medium, 3: heavy
+  if (level === 1) {
+    return { tolStep: 0.20, tolMin: 0.20, tolMax: 2.20, minPtsVals: [3,4,5,6], triesMult: 1.0 };
+  }
+  if (level === 3) {
+    return { tolStep: 0.05, tolMin: 0.10, tolMax: 3.00, minPtsVals: [3,4,5,6,7,8,9,10,11,12], triesMult: 2.1 };
+  }
+  return { tolStep: 0.10, tolMin: 0.10, tolMax: 3.00, minPtsVals: [3,4,5,6,7,8,9,10,11,12], triesMult: 1.4 };
+}
+
+function scoreSolution(sol, totalPoints) {
+  // Lower is better.
+  // Strongly reward coverage (uncovered) but still prioritize convergence among equally-covered.
+  const uncovered = (sol && typeof sol.uncovered === "number") ? sol.uncovered : totalPoints;
+  const conv = sol && sol.conv ? sol.conv : null;
+  const maxMiss = conv ? conv.maxMiss : 9999;
+  const rmsMiss = conv ? conv.rmsMiss : 9999;
+  const used = sol && sol.rings ? sol.rings.reduce((s,r)=>s+r.count,0) : 0;
+
+  // Weight uncovered heavily (each leftover is "huge").
+  // But if uncovered is equal, convergence dominates.
+  const score =
+    uncovered * 10000 +
+    maxMiss * 100 +
+    rmsMiss * 10 -
+    used * 0.1;
+
+  return score;
+}
+
+function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
+
+async function autoOptimize() {
+  const points = getPointUnits();
+  const total = points.length;
+  if (total < 3) return null;
+
+  const baseAttempts = Number(document.getElementById("attempts").value);
+  const effortLevel = Number(document.getElementById("effort").value);
+  const cfg = effortConfig(effortLevel);
+
+  let best = null;
+  let bestScore = Infinity;
+
+  const tolVals = [];
+  for (let t=cfg.tolMin; t<=cfg.tolMax + 1e-9; t+=cfg.tolStep) tolVals.push(Number(t.toFixed(2)));
+
+  const minPtsVals = cfg.minPtsVals.filter(v => v <= Math.max(3, Math.min(12, total)));
+
+  const totalCombos = tolVals.length * minPtsVals.length;
+  let done = 0;
+
+  for (const tol of tolVals) {
+    for (const minPts of minPtsVals) {
+      done++;
+      const tries = Math.floor(baseAttempts * cfg.triesMult);
+
+      // Update status periodically
+      if (done % 2 === 1) {
+        document.getElementById("status").innerHTML =
+          `<span class="warn">AUTO optimizing…</span> tested ${done}/${totalCombos} settings • current tol=${tol.toFixed(2)}°, minPts=${minPts}, tries=${tries}`;
+        // yield so UI redraws
+        await sleep(0);
+      }
+
+      const sol = findIdealCover(points, tol, minPts, tries);
+      if (!sol) continue;
+
+      // annotate meta for reporting
+      sol.meta = { tol, minPts, tries, effort: effortLevel };
+
+      const s = scoreSolution(sol, total);
+      if (s < bestScore) {
+        bestScore = s;
+        best = sol;
+      }
+    }
+  }
+
+  return best;
+}
+
+/* =========================
+   UI
+   ========================= */
+const tolSlider = document.getElementById("tol");
+const tolLabel  = document.getElementById("tolLabel");
+const minPtsSlider = document.getElementById("minPts");
+const minLabel  = document.getElementById("minLabel");
+const attSlider  = document.getElementById("attempts");
+const attLabel   = document.getElementById("attLabel");
+const effSlider  = document.getElementById("effort");
+const effLabel   = document.getElementById("effLabel");
+const status    = document.getElementById("status");
+
+function setLabels() {
+  tolLabel.textContent = Number(tolSlider.value).toFixed(2);
+  minLabel.textContent = String(minPtsSlider.value);
+  attLabel.textContent = String(attSlider.value);
+  effLabel.textContent = (Number(effSlider.value) === 1) ? "Fast" : (Number(effSlider.value) === 3) ? "Heavy" : "Medium";
+}
+tolSlider.addEventListener("input", setLabels);
+minPtsSlider.addEventListener("input", setLabels);
+attSlider.addEventListener("input", setLabels);
+effSlider.addEventListener("input", setLabels);
+
+document.getElementById("addCityBtn").addEventListener("click", async () => {
+  const q = document.getElementById("cityQuery").value.trim();
+  if (!q) { status.textContent = "Type a city query first."; return; }
+  status.innerHTML = `<span class="warn">Geocoding…</span> ${escapeHtml(q)}`;
+
+  try {
+    const g = await geocodeCity(q);
+    cities[g.name] = [g.lat, g.lon];
+    if (g.country) countries[g.name] = g.country;
+
+    status.innerHTML =
+      `<span class="ok">Added:</span> ${escapeHtml(g.name)} (${g.lat.toFixed(4)}, ${g.lon.toFixed(4)})` +
+      (g.country ? ` • ${escapeHtml(g.country)}` : ``);
+
+    current = { rings: [], conv: null, uncovered: null, meta: null };
+    renderGlobe();
+    renderRingsList();
+  } catch (e) {
+    status.innerHTML = `<span class="warn">${escapeHtml(e.message || String(e))}</span>`;
+  }
+});
+
+document.getElementById("removeBtn").addEventListener("click", () => {
+  const name = document.getElementById("removeName").value.trim();
+  if (!name) { status.textContent = "Type the exact location name to remove."; return; }
+
+  if (cities[name]) {
+    delete cities[name];
+    delete countries[name];
+    status.innerHTML = `<span class="ok">Removed:</span> ${escapeHtml(name)}`;
+    current = { rings: [], conv: null, uncovered: null, meta: null };
+    renderGlobe();
+    renderRingsList();
+  } else {
+    status.innerHTML = `<span class="warn">Not found:</span> ${escapeHtml(name)} (must match exactly as shown on the map)`;
+  }
+});
+
+document.getElementById("suggestBtn").addEventListener("click", () => {
+  const points = getPointUnits();
+  const tol = Number(tolSlider.value);
+  const minPts = Number(minPtsSlider.value);
+
+  if (points.length < 3) { status.textContent = "Need at least 3 locations."; return; }
+
+  status.textContent = "Suggesting strongest non-overlapping rings (greedy)…";
+  const rings = pickRingsExclusiveGreedy(points, tol, minPts);
+  const conv = convergenceStats(rings);
+
+  current = { rings, conv, uncovered: null, meta: { mode:"greedy", tol, minPts } };
+
+  const usedCount = rings.reduce((s,r)=>s+r.count,0);
+  const convText = conv ? ` • max miss ${conv.maxMiss.toFixed(2)}° (RMS ${conv.rmsMiss.toFixed(2)}°) @ (${conv.lat.toFixed(3)}, ${conv.lon.toFixed(3)})` : "";
+  status.innerHTML = `<span class="ok">Greedy:</span> ${rings.length} ring(s) using ${usedCount} points.${convText}`;
+
+  renderGlobe();
+  renderRingsList();
+});
+
+document.getElementById("idealBtn").addEventListener("click", () => {
+  const points = getPointUnits();
+  const tol = Number(tolSlider.value);
+  const minPts = Number(minPtsSlider.value);
+  const tries = Number(attSlider.value);
+
+  if (points.length < 3) { status.textContent = "Need at least 3 locations."; return; }
+
+  status.textContent = "Searching for best cover + convergence (single setting)…";
+  const best = findIdealCover(points, tol, minPts, tries);
+
+  if (!best) {
+    status.innerHTML = `<span class="warn">No viable candidates under these settings.</span>`;
+    return;
+  }
+
+  current = { rings: best.rings, conv: best.conv, uncovered: best.uncovered, meta: { mode:"single", tol, minPts, tries } };
+
+  const total = points.length;
+  const used = best.rings.reduce((s,r)=>s+r.count,0);
+  const coverLine = (best.uncovered === 0) ? `<span class="ok">Perfect cover</span>` : `<span class="warn">${best.uncovered} leftover</span>`;
+  const convLine = best.conv ? `max miss ${best.conv.maxMiss.toFixed(2)}° (RMS ${best.conv.rmsMiss.toFixed(2)}°) @ (${best.conv.lat.toFixed(3)}, ${best.conv.lon.toFixed(3)})` : "no convergence";
+  status.innerHTML = `${coverLine} • used ${used}/${total} • ${convLine}`;
+
+  renderGlobe();
+  renderRingsList();
+});
+
+document.getElementById("autoBtn").addEventListener("click", async () => {
+  const points = getPointUnits();
+  if (points.length < 3) { status.textContent = "Need at least 3 locations."; return; }
+
+  const startMsg = `<span class="warn">AUTO optimizing…</span> sweeping tolerances + minPts and running deep search.`;
+  status.innerHTML = startMsg;
+
+  const best = await autoOptimize();
+  if (!best) {
+    status.innerHTML = `<span class="warn">AUTO optimize found no viable solutions.</span>`;
+    return;
+  }
+
+  current = { rings: best.rings, conv: best.conv, uncovered: best.uncovered, meta: best.meta };
+
+  // Also set sliders to the winning settings for transparency
+  if (best.meta && typeof best.meta.tol === "number") {
+    tolSlider.value = best.meta.tol;
+  }
+  if (best.meta && typeof best.meta.minPts === "number") {
+    minPtsSlider.value = best.meta.minPts;
+  }
+  setLabels();
+
+  const total = points.length;
+  const used = best.rings.reduce((s,r)=>s+r.count,0);
+  const coverLine = (best.uncovered === 0) ? `<span class="ok"><b>Perfect cover</b></span>` : `<span class="warn"><b>${best.uncovered} leftover</b></span>`;
+  const convLine = best.conv
+    ? `<b>max miss</b> ${best.conv.maxMiss.toFixed(2)}° • <b>RMS</b> ${best.conv.rmsMiss.toFixed(2)}° • point (${best.conv.lat.toFixed(3)}, ${best.conv.lon.toFixed(3)})`
+    : `no convergence`;
+
+  const metaLine = best.meta
+    ? `best settings: tol=${best.meta.tol.toFixed(2)}°, minPts=${best.meta.minPts}, tries=${best.meta.tries}, effort=${best.meta.effort}`
+    : "";
+
+  status.innerHTML = `${coverLine} • used ${used}/${total} • ${convLine}<br><span class="small">${escapeHtml(metaLine)}</span>`;
+
+  renderGlobe();
+  renderRingsList();
+});
+
+document.getElementById("clearBtn").addEventListener("click", () => {
+  current = { rings: [], conv: null, uncovered: null, meta: null };
+  status.textContent = "Cleared.";
+  renderGlobe();
+  renderRingsList();
+});
+
+document.getElementById("resetBtn").addEventListener("click", () => {
+  cities = structuredClone(DEFAULT_CITIES);
+  countries = structuredClone(DEFAULT_COUNTRIES);
+  current = { rings: [], conv: null, uncovered: null, meta: null };
+  status.textContent = "Reset defaults.";
+  renderGlobe();
+  renderRingsList();
+});
+
+setLabels();
+renderGlobe();
+renderRingsList();
+</script>
+</body>
+</html>
