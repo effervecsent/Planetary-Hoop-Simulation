@@ -1,0 +1,1179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Great Circle — Stage 1 / Roamy Results</title>
+  <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+  <style>
+    :root{
+      --bg:#0d1117;
+      --panel:rgba(22,27,34,0.92);
+      --border:#30363d;
+      --text:#c9d1d9;
+      --muted:#8b949e;
+      --accent:#58a6ff;
+    }
+
+    body { margin:0; background:var(--bg); color:var(--text); font-family: Arial, sans-serif; overflow:hidden; }
+
+    /* NEW: two-column app layout */
+    #app{
+      width:100vw;
+      height:100vh;
+      display:flex;
+      align-items:stretch;
+    }
+
+    /* Side panel now lives in flow (not absolute), so it never covers the globe */
+    #panel{
+      width: 420px;
+      max-width: 520px;
+      min-width: 360px;
+      height: 100vh;
+      overflow:auto;
+
+      background: var(--panel);
+      border-right: 1px solid var(--border);
+      padding: 12px 12px 10px 12px;
+      box-shadow: 8px 0 30px rgba(0,0,0,0.35);
+    }
+
+    /* Globe fills remaining space */
+    #globeWrap{
+      flex:1;
+      height:100vh;
+      position:relative;
+      min-width: 0; /* important for Plotly in flex containers */
+    }
+    #globe{
+      width:100%;
+      height:100%;
+    }
+
+    #panel h2 { margin: 0 0 8px 0; font-size: 16px; color:var(--accent); }
+
+    .row { display:flex; gap:8px; margin: 8px 0; flex-wrap:wrap; align-items:center; }
+    .row > * { flex:1; min-width: 120px; }
+
+    input, button, select {
+      background:#0b1220; color:var(--text);
+      border:1px solid var(--border); border-radius: 8px;
+      padding: 8px 10px; font-size: 12px;
+      outline:none;
+    }
+    button { cursor:pointer; background:#111b2e; flex:0; min-width: 170px; }
+    button:hover, select:hover { border-color:var(--accent); }
+
+    .small { font-size: 11px; color:var(--muted); line-height: 1.35; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+
+    .list {
+      margin-top: 8px;
+      border-top: 1px solid var(--border);
+      padding-top: 8px;
+      max-height: 520px;
+      overflow:auto;
+    }
+
+    .ringItem {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px;
+      margin: 8px 0;
+      background: rgba(13,17,23,0.55);
+    }
+    .ringTitle {
+      font-size: 12px; font-weight: bold; margin-bottom: 6px; color:var(--text);
+      display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+    }
+    .swatch { width: 14px; height: 14px; border-radius: 4px; border: 1px solid var(--border); display:inline-block; }
+    .ringMeta { font-size: 11px; color:var(--muted); margin-top: 4px; }
+    .pill {
+      display:inline-block; padding:2px 8px; border-radius:999px;
+      border:1px solid var(--border); margin-right:6px; margin-top:4px;
+      font-size: 11px;
+    }
+    .warn { color:#ffcc66; }
+    .ok { color:#7ee787; }
+
+    .split { display:grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    @media (max-width: 980px) {
+      #app{ flex-direction:column; }
+      #panel{ width:100vw; height:auto; max-height: 52vh; border-right:none; border-bottom:1px solid var(--border); }
+      #globeWrap{ height: calc(100vh - 52vh); }
+      .split { grid-template-columns: 1fr; }
+    }
+
+    .checkRow{
+      display:flex; gap:12px; flex-wrap:wrap; align-items:center;
+      border:1px solid var(--border); border-radius:10px; padding:8px 10px;
+      background: rgba(13,17,23,0.35);
+    }
+    .checkRow label{ display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text); }
+    .checkRow input[type="checkbox"]{ transform: scale(1.05); }
+  </style>
+</head>
+<body>
+
+<div id="app">
+  <div id="panel">
+    <h2>Great Circle — Stage 1 / Roamy Results</h2>
+
+    <div class="row" style="margin-top:10px;">
+      <select id="datasetSelect" style="max-width:220px; flex:0;">
+        <option value="stage1">Stage 1</option>
+        <option value="roamy">Roamy Results</option>
+      </select>
+
+      <button id="copyStageToRoamy">Copy Stage 1 → Roamy</button>
+      <button id="copyRoamyToStage">Copy Roamy → Stage 1</button>
+      <button id="clearActive">Clear Active Dataset</button>
+      <button id="geocodeMissingActive">Geocode Missing (Active)</button>
+
+      <div class="small" id="activeInfo" style="flex:2; min-width:240px;"></div>
+    </div>
+
+    <div class="row">
+      <input id="cityQuery" placeholder="Add location by name (active dataset)" />
+      <button id="addCityBtn">Geocode + Add</button>
+      <input id="removeName" placeholder="Remove by exact name (active dataset)" />
+      <button id="removeBtn">Remove</button>
+    </div>
+
+    <div class="row">
+      <div class="small" style="min-width:120px; flex:0.7;">Map display</div>
+      <div class="checkRow" style="flex:3;">
+        <label><input type="checkbox" id="showStagePoints" checked> Stage 1 points</label>
+        <label><input type="checkbox" id="showRoamyPoints" checked> Roamy points</label>
+        <label><input type="checkbox" id="showStageRings" checked> Stage 1 rings</label>
+        <label><input type="checkbox" id="showRoamyRings" checked> Roamy rings</label>
+
+        <div style="flex:1; min-width:240px;">
+          <select id="ringPointFilter" title="Which points are used to generate rings?">
+            <option value="both">Ring generation: Both datasets</option>
+            <option value="stage1">Ring generation: Stage 1 only</option>
+            <option value="roamy">Ring generation: Roamy only</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="split">
+      <div>
+        <label class="small" style="display:block; margin-top:6px;">
+          Ring tolerance (°): <span id="tolLabel">0.50</span>
+        </label>
+        <input id="tol" type="range" min="0.10" max="3.00" value="0.50" step="0.05"/>
+      </div>
+      <div>
+        <label class="small" style="display:block; margin-top:6px;">
+          Min points per ring: <span id="minLabel">4</span>
+        </label>
+        <input id="minPts" type="range" min="3" max="12" value="4" step="1"/>
+      </div>
+    </div>
+
+    <div class="split">
+      <div>
+        <label class="small" style="display:block; margin-top:6px;">
+          Search attempts per setting: <span id="attLabel">140</span>
+        </label>
+        <input id="attempts" type="range" min="40" max="1200" value="140" step="20"/>
+      </div>
+      <div>
+        <label class="small" style="display:block; margin-top:6px;">
+          AUTO optimize effort: <span id="effLabel">Medium</span>
+        </label>
+        <input id="effort" type="range" min="1" max="3" value="2" step="1"/>
+      </div>
+    </div>
+
+    <div class="row">
+      <button id="suggestBtn">Suggest Rings (Greedy)</button>
+      <button id="idealBtn">Find Ideal Cover + Convergence</button>
+      <button id="autoBtn">AUTO OPTIMIZE (Sweep)</button>
+      <button id="clearResultBtn">Clear Result (Active)</button>
+      <button id="resetBtn">Reset Defaults (All)</button>
+    </div>
+
+    <div id="status" class="small"></div>
+    <div id="ringsList" class="list"></div>
+  </div>
+
+  <div id="globeWrap">
+    <div id="globe"></div>
+  </div>
+</div>
+
+<script>
+/* =========================
+   Helpers
+   ========================= */
+const d2r = Math.PI / 180;
+const r2d = 180 / Math.PI;
+
+function clamp(x, lo, hi) { return Math.max(lo, Math.min(hi, x)); }
+function toCart(lat, lon) {
+  const l = lat * d2r, g = lon * d2r;
+  return [Math.cos(l)*Math.cos(g), Math.cos(l)*Math.sin(g), Math.sin(l)];
+}
+function norm(v) { return Math.sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]); }
+function dot(a,b) { return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
+function cross(a,b) {
+  return [
+    a[1]*b[2]-a[2]*b[1],
+    a[2]*b[0]-a[0]*b[2],
+    a[0]*b[1]-a[1]*b[0]
+  ];
+}
+function unit(v){
+  const n = norm(v);
+  if (!isFinite(n) || n < 1e-12) return null;
+  return [v[0]/n, v[1]/n, v[2]/n];
+}
+function toLatLon(x,y,z) { return [Math.asin(z)*r2d, Math.atan2(y,x)*r2d]; }
+
+function angularDistPointToGreatCircleDeg(nUnit, pUnit) {
+  const s = Math.abs(dot(nUnit, pUnit));
+  const ang = Math.asin(clamp(s, 0, 1));
+  return ang * r2d;
+}
+
+function generateFullRingFromNormal(nUnit, points=900) {
+  const a = (Math.abs(nUnit[2]) < 0.9) ? [0,0,1] : [0,1,0];
+  const u = unit(cross(nUnit, a));
+  if (!u) return { lats: [], lons: [] };
+  const v = unit(cross(nUnit, u));
+  if (!v) return { lats: [], lons: [] };
+
+  const lats = [], lons = [];
+  for (let i=0; i<=points; i++){
+    const t = (i/points)*2*Math.PI;
+    const ct = Math.cos(t), st = Math.sin(t);
+    const pt = [u[0]*ct + v[0]*st, u[1]*ct + v[1]*st, u[2]*ct + v[2]*st];
+    const [lat, lon] = toLatLon(pt[0], pt[1], pt[2]);
+    if (lons.length>0 && Math.abs(lon - lons[lons.length-1]) > 180) {
+      lats.push(null); lons.push(null);
+    }
+    lats.push(lat); lons.push(lon);
+  }
+  return { lats, lons };
+}
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+  }[c]));
+}
+function deepClone(obj){ return JSON.parse(JSON.stringify(obj)); }
+
+/* =========================
+   Seed locations
+   ========================= */
+function makeLoc(name, lat, lon, country=""){
+  return { name, lat, lon, country, missing: !(isFinite(lat) && isFinite(lon)) };
+}
+
+/* Stage 1 (boats) */
+const DEFAULT_STAGE1 = [
+  makeLoc("Kabul, Afghanistan", 34.5553, 69.2075, "Afghanistan"),
+  makeLoc("Upper Hutt, New Zealand", -41.1245, 175.0706, "New Zealand"),
+  makeLoc("Sucre, Bolivia", -19.0196, -65.2619, "Bolivia"),
+  makeLoc("Cairo, Egypt", 30.0444, 31.2357, "Egypt"),
+  makeLoc("Buffalo, New York", 42.8864, -78.8784, "United States"),
+  makeLoc("Tierra del Fuego, Argentina", -54.8019, -68.3030, "Argentina"),
+  makeLoc("Divo, Côte d’Ivoire", 5.8374, -5.3572, "Côte d’Ivoire"),
+  makeLoc("Nome, Alaska", 64.5011, -165.4064, "United States"),
+  makeLoc("Tallinn, Estonia", 59.4370, 24.7536, "Estonia"),
+  makeLoc("Seoul, South Korea", 37.5665, 126.9780, "South Korea"),
+  makeLoc("Eyjafjallajökull, Iceland", 63.6333, -19.6333, "Iceland"),
+  makeLoc("Lima, Peru", -12.0464, -77.0428, "Peru"),
+  makeLoc("Copenhagen, Denmark", 55.6761, 12.5683, "Denmark"),
+  makeLoc("Algiers, Algeria", 36.7538, 3.0588, "Algeria"),
+  makeLoc("Arles, France", 43.6766, 4.6278, "France"),
+  makeLoc("Ascension Island", -7.9467, -14.3559, "Saint Helena, Ascension and Tristan da Cunha"),
+  makeLoc("Iturup, Russia", 45.0333, 147.8833, "Russia"),
+  makeLoc("New Orleans, Louisiana", 29.9511, -90.0715, "United States"),
+  makeLoc("Malé, Maldives", 4.1755, 73.5093, "Maldives"),
+  makeLoc("Casablanca, Morocco", 33.5731, -7.5898, "Morocco"),
+  makeLoc("Maputo, Mozambique", -25.9692, 32.5732, "Mozambique"),
+  makeLoc("Ankara, Turkey", 39.9334, 32.8597, "Turkey"),
+  makeLoc("Kupang, Indonesia", -10.1772, 123.6070, "Indonesia"),
+  makeLoc("Lahore, Pakistan", 31.5204, 74.3587, "Pakistan"),
+  makeLoc("Tbilisi, Georgia", 41.7151, 44.8271, "Georgia"),
+  makeLoc("Toad Suck, Arkansas", 35.1556, -92.4413, "United States"),
+  makeLoc("Yellowknife, Northwest Territories", 62.4540, -114.3718, "Canada"),
+  makeLoc("Moscow, Russia", 55.7558, 37.6173, "Russia"),
+  makeLoc("Yellowstone", 44.4280, -110.5885, "United States"),
+  makeLoc("Accra, Ghana", 5.6037, -0.1870, "Ghana"),
+  makeLoc("Tashkent, Uzbekistan", 41.2995, 69.2401, "Uzbekistan"),
+  makeLoc("Dimtu, Ethiopia", 6.8167, 37.7833, "Ethiopia"),
+  makeLoc("Tijuana, Mexico", 32.5149, -117.0382, "Mexico"),
+  makeLoc("Montreal, Canada", 45.5017, -73.5673, "Canada"),
+  makeLoc("Wichita, Kansas", 37.6872, -97.3301, "United States"),
+  makeLoc("Quito, Ecuador", -0.1807, -78.4678, "Ecuador"),
+  makeLoc("Île de la Possession", -46.3986, 51.7583, "French Southern and Antarctic Lands"),
+  makeLoc("Heard Island", -53.0818, 73.5042, "Australia"),
+  makeLoc("Tampa Bay, Florida", 27.9506, -82.4572, "United States"),
+  makeLoc("Queensland, Australia", -20.9176, 142.7028, "Australia"),
+  makeLoc("Doha, Qatar", 25.2854, 51.5310, "Qatar"),
+  makeLoc("Antananarivo, Madagascar", -18.8792, 47.5079, "Madagascar"),
+  makeLoc("Nazaré, Portugal", 39.6012, -9.0700, "Portugal"),
+  makeLoc("South Pole", -90.0, 0.0, "Antarctica"),
+];
+
+/* Roamy Results (car/plane/horse) */
+const DEFAULT_ROAMY = [
+  makeLoc("Mosul, Iraq", 36.3400, 43.1300, "Iraq"),
+  makeLoc("Charlotte, North Carolina", 35.2271, -80.8431, "United States"),
+  makeLoc("Ambanja, Madagascar", -13.6833, 48.4500, "Madagascar"),
+  makeLoc("Arzamas, Russia", 55.3949, 43.8399, "Russia"),
+  makeLoc("Casper, Wyoming", 42.8501, -106.3252, "United States"),
+  makeLoc("Mayotte", -12.8275, 45.1662, "France"),
+  makeLoc("Nova Russas, Brazil", -4.7050, -40.5620, "Brazil"),
+  makeLoc("Giresun, Turkey", 40.9128, 38.3895, "Turkey"),
+  makeLoc("San Miguel de Tucumán, Argentina", -26.8083, -65.2176, "Argentina"),
+  makeLoc("Baku, Azerbaijan", 40.4093, 49.8671, "Azerbaijan"),
+  makeLoc("Pune, India", 18.5204, 73.8567, "India"),
+  makeLoc("Surat, India", 21.1702, 72.8311, "India"),
+  makeLoc("L’Ascension, Quebec", 46.3500, -74.6000, "Canada"),
+  makeLoc("Antalya, Turkey", 36.8969, 30.7133, "Turkey"),
+  makeLoc("Krasnodar, Russia", 45.0355, 38.9753, "Russia"),
+  makeLoc("Istanbul, Turkey", 41.0082, 28.9784, "Turkey"),
+  makeLoc("Manaus, Brazil", -3.1190, -60.0217, "Brazil"),
+  makeLoc("Visby, Sweden", 57.6348, 18.2948, "Sweden"),
+  makeLoc("Christchurch, New Zealand", -43.5321, 172.6362, "New Zealand"),
+  makeLoc("Marrakesh, Morocco", 31.6295, -7.9811, "Morocco"),
+  makeLoc("Edmonton, Alberta", 53.5461, -113.4938, "Canada"),
+  makeLoc("Orlando, Florida", 28.5383, -81.3792, "United States"),
+  makeLoc("Velingrad, Bulgaria", 42.0217, 24.0000, "Bulgaria"),
+  makeLoc("Beatty, Nevada", 36.9086, -116.7592, "United States"),
+  makeLoc("Marquette, Michigan", 46.5436, -87.3954, "United States"),
+  makeLoc("Vladivostok, Russia", 43.1155, 131.8855, "Russia"),
+  makeLoc("Saint-Pierre", 46.7780, -56.1770, "France (Saint Pierre and Miquelon)"),
+  makeLoc("Castelo Branco, Portugal", 39.8222, -7.4909, "Portugal"),
+  makeLoc("České Budějovice, Czechia", 48.9747, 14.4747, "Czechia"),
+  makeLoc("Curicó, Chile", -34.9828, -71.2394, "Chile"),
+  makeLoc("Cochabamba, Bolivia", -17.3895, -66.1568, "Bolivia"),
+  makeLoc("Ōkato, New Zealand", -39.1956, 173.8820, "New Zealand"),
+  makeLoc("Sokodé, Togo", 8.9833, 1.1333, "Togo"),
+  makeLoc("Monkey Bay, Malawi", -14.0826, 34.9165, "Malawi"),
+  makeLoc("Natif Waterfalls, Oman", 22.9300, 57.5300, "Oman"),
+  makeLoc("Medan, Indonesia", 3.5952, 98.6722, "Indonesia"),
+];
+
+/* =========================
+   Dataset state
+   ========================= */
+const datasets = {
+  stage1: { label: "Stage 1", locations: deepClone(DEFAULT_STAGE1), result: { rings:[], conv:null, uncovered:null, meta:null } },
+  roamy:  { label: "Roamy Results", locations: deepClone(DEFAULT_ROAMY), result: { rings:[], conv:null, uncovered:null, meta:null } }
+};
+let activeKey = "stage1";
+function active(){ return datasets[activeKey]; }
+
+function normalizeLocations(arr){
+  return arr.filter(x =>
+    x && typeof x.name === "string" &&
+    isFinite(Number(x.lat)) && isFinite(Number(x.lon))
+  ).map(x => ({
+    name: x.name.trim(),
+    lat: Number(x.lat),
+    lon: Number(x.lon),
+    country: (x.country || "").trim()
+  }));
+}
+
+/* =========================
+   Geocoding
+   ========================= */
+async function geocodeCity(query) {
+  const url = "https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&q=" + encodeURIComponent(query);
+  const res = await fetch(url, { headers: { "Accept": "application/json" } });
+  if (!res.ok) throw new Error("Geocoding failed (HTTP " + res.status + ")");
+  const data = await res.json();
+  if (!data || !data.length) throw new Error("No results found for: " + query);
+
+  const item = data[0];
+  const lat = Number(item.lat);
+  const lon = Number(item.lon);
+  const addr = item.address || {};
+  const country = addr.country || "";
+  const name =
+    (addr.city || addr.town || addr.village || addr.hamlet || addr.county || item.display_name?.split(",")[0] || query)
+      .trim();
+
+  return { name, lat, lon, country };
+}
+
+/* =========================
+   Points for ring generation
+   ========================= */
+function getLocationsForRingGeneration(){
+  const mode = document.getElementById("ringPointFilter").value;
+  if (mode === "stage1") return normalizeLocations(datasets.stage1.locations);
+  if (mode === "roamy")  return normalizeLocations(datasets.roamy.locations);
+  return normalizeLocations(datasets.stage1.locations).concat(normalizeLocations(datasets.roamy.locations));
+}
+
+function getPointUnitsFromLocations(locs){
+  return locs.map(x => ({
+    name: x.name,
+    lat: x.lat,
+    lon: x.lon,
+    country: x.country || "",
+    p: unit(toCart(x.lat, x.lon))
+  })).filter(x => x.p);
+}
+
+/* =========================
+   Candidate rings + searches
+   ========================= */
+function ringKey(nUnit) {
+  const q = (x)=>Math.round(x*1000);
+  const a = [q(nUnit[0]), q(nUnit[1]), q(nUnit[2])];
+  const b = [-a[0], -a[1], -a[2]];
+  const sa = a.join(","), sb = b.join(",");
+  return (sa < sb) ? sa : sb;
+}
+const STRICT = {
+  maxAvgErrFrac: 0.55,
+  maxErrFrac: 0.95,
+  maxCandidates: 700,
+  pairSamples: 22000
+};
+function buildCandidatesAll(points, toleranceDeg, minInliers) {
+  const n = points.length;
+  if (n < 3) return [];
+
+  const candidates = [];
+  const seen = new Set();
+  const maxPairs = n*(n-1)/2;
+  const samples = Math.min(STRICT.pairSamples, maxPairs);
+
+  for (let s=0; s<samples; s++){
+    const i = Math.floor(Math.random()*n);
+    let j = Math.floor(Math.random()*n);
+    if (j === i) { s--; continue; }
+
+    const nn = unit(cross(points[i].p, points[j].p));
+    if (!nn) continue;
+
+    const key = ringKey(nn);
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    let inliers = [];
+    let errSum = 0;
+    let errMax = 0;
+
+    for (let t=0; t<n; t++){
+      const d = angularDistPointToGreatCircleDeg(nn, points[t].p);
+      if (d <= toleranceDeg) {
+        inliers.push({ name: points[t].name, d, country: points[t].country || "" });
+        errSum += d;
+        errMax = Math.max(errMax, d);
+      }
+    }
+
+    if (inliers.length < minInliers) continue;
+
+    inliers.sort((a,b)=>a.d-b.d);
+    const avgErr = errSum / inliers.length;
+
+    const avgOK = avgErr <= (STRICT.maxAvgErrFrac * toleranceDeg);
+    const maxOK = errMax <= (STRICT.maxErrFrac * toleranceDeg);
+    if (!avgOK || !maxOK) continue;
+
+    candidates.push({ n: nn, inliers, count: inliers.length, avgErr, errMax });
+  }
+
+  candidates.sort((a,b)=>{
+    if (b.count !== a.count) return b.count - a.count;
+    if (a.avgErr !== b.avgErr) return a.avgErr - b.avgErr;
+    return a.errMax - b.errMax;
+  });
+
+  return candidates.slice(0, STRICT.maxCandidates);
+}
+
+/* =========================
+   Convergence
+   ========================= */
+function matAddOuter(S, n) {
+  S[0][0] += n[0]*n[0]; S[0][1] += n[0]*n[1]; S[0][2] += n[0]*n[2];
+  S[1][0] += n[1]*n[0]; S[1][1] += n[1]*n[1]; S[1][2] += n[1]*n[2];
+  S[2][0] += n[2]*n[0]; S[2][1] += n[2]*n[1]; S[2][2] += n[2]*n[2];
+}
+function matVec(S, v) {
+  return [
+    S[0][0]*v[0] + S[0][1]*v[1] + S[0][2]*v[2],
+    S[1][0]*v[0] + S[1][1]*v[1] + S[1][2]*v[2],
+    S[2][0]*v[0] + S[2][1]*v[1] + S[2][2]*v[2]
+  ];
+}
+function vnorm(v){ return Math.sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]); }
+function vunit(v){
+  const n = vnorm(v);
+  if (!isFinite(n) || n < 1e-12) return null;
+  return [v[0]/n, v[1]/n, v[2]/n];
+}
+function randUnit(){
+  const u = Math.random()*2 - 1;
+  const t = Math.random()*2*Math.PI;
+  const s = Math.sqrt(1-u*u);
+  return [s*Math.cos(t), s*Math.sin(t), u];
+}
+function objectiveS(S, c) {
+  const Sc = matVec(S, c);
+  return dot(c, Sc);
+}
+function smallestEigenVectorApprox(S, tries=70, iters=95) {
+  let bestC = null;
+  let bestVal = Infinity;
+  for (let k=0; k<tries; k++){
+    let c = randUnit();
+    for (let t=0; t<iters; t++){
+      const Sc = matVec(S, c);
+      const step = 0.35;
+      c = vunit([c[0] - step*Sc[0], c[1] - step*Sc[1], c[2] - step*Sc[2]]);
+      if (!c) break;
+    }
+    if (!c) continue;
+    const val = objectiveS(S, c);
+    if (val < bestVal) { bestVal = val; bestC = c; }
+  }
+  return bestC;
+}
+function convergenceStats(rings) {
+  if (!rings || rings.length < 2) return null;
+  const S = [[0,0,0],[0,0,0],[0,0,0]];
+  rings.forEach(r => matAddOuter(S, r.n));
+  const c = smallestEigenVectorApprox(S, 70, 95);
+  if (!c) return null;
+
+  const misses = rings.map(r => Math.asin(clamp(Math.abs(dot(r.n, c)), 0, 1))*r2d);
+  const maxMiss = Math.max(...misses);
+  const rmsMiss = Math.sqrt(misses.reduce((s,x)=>s+x*x,0)/misses.length);
+  const [lat, lon] = toLatLon(c[0], c[1], c[2]);
+  const [alat, alon] = toLatLon(-c[0], -c[1], -c[2]);
+
+  return { c, lat, lon, alat, alon, maxMiss, rmsMiss, misses };
+}
+
+/* =========================
+   Ideal cover search
+   ========================= */
+function findIdealCover(points, toleranceDeg, minInliers, attempts=140) {
+  const allNames = points.map(p=>p.name);
+  const allSet = new Set(allNames);
+
+  const candidates = buildCandidatesAll(points, toleranceDeg, minInliers);
+  if (candidates.length === 0) return null;
+
+  candidates.forEach(r => r._set = new Set(r.inliers.map(x=>x.name)));
+
+  function uncoveredCount(used) {
+    let cnt = 0;
+    for (const n of allSet) if (!used.has(n)) cnt++;
+    return cnt;
+  }
+
+  let best = null;
+
+  for (let a=0; a<attempts; a++){
+    const pool = candidates.slice();
+    pool.sort((r1,r2)=>{
+      const s1 = (r1.count*1000) - (r1.avgErr*120) + (Math.random()*5);
+      const s2 = (r2.count*1000) - (r2.avgErr*120) + (Math.random()*5);
+      return s2 - s1;
+    });
+
+    const used = new Set();
+    const chosen = [];
+
+    while (true) {
+      let bestIdx = -1;
+      let bestGain = 0;
+
+      for (let i=0; i<pool.length; i++){
+        const r = pool[i];
+        let ok = true;
+        for (const nm of r._set) { if (used.has(nm)) { ok=false; break; } }
+        if (!ok) continue;
+
+        const gain = r._set.size;
+        if (gain > bestGain) { bestGain = gain; bestIdx = i; }
+      }
+
+      if (bestIdx === -1) break;
+      const take = pool.splice(bestIdx,1)[0];
+      chosen.push(take);
+      for (const nm of take._set) used.add(nm);
+
+      if (used.size === allSet.size) break;
+    }
+
+    const uncovered = uncoveredCount(used);
+    const conv = convergenceStats(chosen);
+
+    const cand = { rings: chosen, uncovered, conv, tol: toleranceDeg, minPts: minInliers };
+
+    if (!best) best = cand;
+    else {
+      const cm = cand.conv ? cand.conv.maxMiss : Infinity;
+      const bm = best.conv ? best.conv.maxMiss : Infinity;
+      const cr = cand.conv ? cand.conv.rmsMiss : Infinity;
+      const br = best.conv ? best.conv.rmsMiss : Infinity;
+      const cUsed = cand.rings.reduce((s,r)=>s+r.count,0);
+      const bUsed = best.rings.reduce((s,r)=>s+r.count,0);
+
+      if (cand.uncovered < best.uncovered) best = cand;
+      else if (cand.uncovered === best.uncovered) {
+        if (cm < bm) best = cand;
+        else if (cm === bm) {
+          if (cr < br) best = cand;
+          else if (cr === br && cUsed > bUsed) best = cand;
+        }
+      }
+    }
+  }
+
+  return best;
+}
+
+/* =========================
+   Greedy rings
+   ========================= */
+const FIXED_RING_COUNT = 6;
+function pickRingsExclusiveGreedy(points, toleranceDeg, minInliers) {
+  const candidates = buildCandidatesAll(points, toleranceDeg, minInliers);
+  const used = new Set();
+  const picked = [];
+  for (let iter=0; iter<FIXED_RING_COUNT; iter++){
+    let bestIdx = -1;
+    for (let c=0; c<candidates.length; c++){
+      const cand = candidates[c];
+      let overlaps = false;
+      for (const x of cand.inliers) if (used.has(x.name)) { overlaps=true; break; }
+      if (overlaps) continue;
+      bestIdx = c; break;
+    }
+    if (bestIdx === -1) break;
+    const chosen = candidates[bestIdx];
+    picked.push(chosen);
+    chosen.inliers.forEach(x => used.add(x.name));
+  }
+  return picked;
+}
+
+/* =========================
+   AUTO OPT
+   ========================= */
+function effortConfig(level) {
+  if (level === 1) return { tolStep: 0.20, tolMin: 0.20, tolMax: 2.20, minPtsVals: [3,4,5,6], triesMult: 1.0 };
+  if (level === 3) return { tolStep: 0.05, tolMin: 0.10, tolMax: 3.00, minPtsVals: [3,4,5,6,7,8,9,10,11,12], triesMult: 2.1 };
+  return { tolStep: 0.10, tolMin: 0.10, tolMax: 3.00, minPtsVals: [3,4,5,6,7,8,9,10,11,12], triesMult: 1.4 };
+}
+function scoreSolution(sol, totalPoints) {
+  const uncovered = (sol && typeof sol.uncovered === "number") ? sol.uncovered : totalPoints;
+  const conv = sol && sol.conv ? sol.conv : null;
+  const maxMiss = conv ? conv.maxMiss : 9999;
+  const rmsMiss = conv ? conv.rmsMiss : 9999;
+  const used = sol && sol.rings ? sol.rings.reduce((s,r)=>s+r.count,0) : 0;
+  return uncovered * 10000 + maxMiss * 100 + rmsMiss * 10 - used * 0.1;
+}
+function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
+
+async function autoOptimizeForActive() {
+  const locs = getLocationsForRingGeneration();
+  const points = getPointUnitsFromLocations(locs);
+  const total = points.length;
+  if (total < 3) return null;
+
+  const baseAttempts = Number(document.getElementById("attempts").value);
+  const effortLevel = Number(document.getElementById("effort").value);
+  const cfg = effortConfig(effortLevel);
+
+  let best = null;
+  let bestScore = Infinity;
+
+  const tolVals = [];
+  for (let t=cfg.tolMin; t<=cfg.tolMax + 1e-9; t+=cfg.tolStep) tolVals.push(Number(t.toFixed(2)));
+  const minPtsVals = cfg.minPtsVals.filter(v => v <= Math.max(3, Math.min(12, total)));
+
+  const totalCombos = tolVals.length * minPtsVals.length;
+  let done = 0;
+
+  for (const tol of tolVals) {
+    for (const minPts of minPtsVals) {
+      done++;
+      const tries = Math.floor(baseAttempts * cfg.triesMult);
+
+      if (done % 2 === 1) {
+        status.innerHTML =
+          `<span class="warn">AUTO optimizing…</span> ${done}/${totalCombos} • tol=${tol.toFixed(2)}°, minPts=${minPts}, tries=${tries}`;
+        await sleep(0);
+      }
+
+      const sol = findIdealCover(points, tol, minPts, tries);
+      if (!sol) continue;
+      sol.meta = { tol, minPts, tries, effort: effortLevel, pointsUsed: document.getElementById("ringPointFilter").value };
+
+      const s = scoreSolution(sol, total);
+      if (s < bestScore) { bestScore = s; best = sol; }
+    }
+  }
+
+  return best;
+}
+
+/* =========================
+   Letters
+   ========================= */
+function initialLetter(s) {
+  const m = (s || "").trim().toUpperCase().match(/[A-Z]/);
+  return m ? m[0] : "?";
+}
+function ringLettersCity(ring) { return ring.inliers.map(x => initialLetter(x.name)).join("").replace(/[^A-Z?]/g, ""); }
+function ringLettersCountry(ring) { return ring.inliers.map(x => initialLetter(x.country)).join("").replace(/[^A-Z?]/g, ""); }
+function pillsFromLetters(letters) { return letters.split("").map(ch => `<span class="pill mono">${ch}</span>`).join(""); }
+
+/* =========================
+   Rendering
+   ========================= */
+const ringColorsStage = ["#7ee787","#58a6ff","#a371f7","#d2a8ff","#39c5cf","#ffcc66","#ffa657","#c9d1d9"];
+const ringColorsRoamy = ["#ff7b72","#ffa657","#f0f6fc","#d2a8ff","#79c0ff","#c9d1d9","#ffcc66","#a371f7"];
+
+function updateActiveInfo() {
+  const a = active();
+  const geocoded = a.locations.filter(x => isFinite(x.lat) && isFinite(x.lon)).length;
+  activeInfo.innerHTML =
+    `<span class="mono">Active: ${a.label}</span> • ${a.locations.length} location(s) • <span class="ok">${geocoded}</span> geocoded`;
+}
+
+function renderGlobe() {
+  const showStagePoints = document.getElementById("showStagePoints").checked;
+  const showRoamyPoints = document.getElementById("showRoamyPoints").checked;
+  const showStageRings  = document.getElementById("showStageRings").checked;
+  const showRoamyRings  = document.getElementById("showRoamyRings").checked;
+
+  const stageLocs = normalizeLocations(datasets.stage1.locations);
+  const roamyLocs = normalizeLocations(datasets.roamy.locations);
+
+  const traces = [];
+
+  // Rings
+  if (showStageRings) {
+    datasets.stage1.result.rings.forEach((ring, idx) => {
+      const col = ringColorsStage[idx % ringColorsStage.length];
+      const curve = generateFullRingFromNormal(ring.n, 900);
+      traces.push({
+        type: "scattergeo",
+        mode: "lines",
+        lon: curve.lons,
+        lat: curve.lats,
+        line: { width: 3, color: col },
+        opacity: 0.60,
+        hoverinfo: "none"
+      });
+    });
+  }
+
+  if (showRoamyRings) {
+    datasets.roamy.result.rings.forEach((ring, idx) => {
+      const col = ringColorsRoamy[idx % ringColorsRoamy.length];
+      const curve = generateFullRingFromNormal(ring.n, 900);
+      traces.push({
+        type: "scattergeo",
+        mode: "lines",
+        lon: curve.lons,
+        lat: curve.lats,
+        line: { width: 3, color: col, dash: "dot" },
+        opacity: 0.60,
+        hoverinfo: "none"
+      });
+    });
+  }
+
+  // Convergence markers
+  function addConvergence(res, label, colorMain, colorAlt){
+    if (!res || !res.conv) return;
+    traces.push({
+      type: "scattergeo",
+      mode: "markers+text",
+      lon: [res.conv.lon],
+      lat: [res.conv.lat],
+      text: [`⭐ ${label} convergence`],
+      textposition: "bottom center",
+      hoverinfo: "text",
+      marker: { size: 10, symbol: "star", color: colorMain, line: { width: 1, color: "#000000" } },
+      textfont: { color: colorMain, size: 12 }
+    });
+    traces.push({
+      type: "scattergeo",
+      mode: "markers+text",
+      lon: [res.conv.alon],
+      lat: [res.conv.alat],
+      text: [`⭐ ${label} antipode`],
+      textposition: "bottom center",
+      hoverinfo: "text",
+      marker: { size: 8, symbol: "star", color: colorAlt, line: { width: 1, color: "#000000" } },
+      textfont: { color: colorAlt, size: 11 }
+    });
+  }
+  addConvergence(datasets.stage1.result, "Stage 1", "#ffcc66", "#8b949e");
+  addConvergence(datasets.roamy.result, "Roamy", "#ffa657", "#8b949e");
+
+  // Points
+  if (showStagePoints) {
+    traces.push({
+      type: "scattergeo",
+      mode: "markers+text",
+      lon: stageLocs.map(x => x.lon),
+      lat: stageLocs.map(x => x.lat),
+      text: stageLocs.map(x => x.name),
+      textposition: "top right",
+      hoverinfo: "text",
+      marker: { size: 7, color: "#7ee787", line: { width: 1, color: "#000000" } },
+      textfont: { color: "#7ee787", size: 11 },
+      name: "Stage 1 points"
+    });
+  }
+  if (showRoamyPoints) {
+    traces.push({
+      type: "scattergeo",
+      mode: "markers+text",
+      lon: roamyLocs.map(x => x.lon),
+      lat: roamyLocs.map(x => x.lat),
+      text: roamyLocs.map(x => x.name),
+      textposition: "top right",
+      hoverinfo: "text",
+      marker: { size: 7, color: "#79c0ff", line: { width: 1, color: "#000000" } },
+      textfont: { color: "#79c0ff", size: 11 },
+      name: "Roamy points"
+    });
+  }
+
+  Plotly.newPlot("globe", traces, {
+    geo: {
+      projection: { type: "orthographic", rotation: { lon: -40, lat: 40, roll: 0 } },
+      showocean: true, oceancolor: "#0d1117",
+      showland: true, landcolor: "#21262d",
+      showcountries: true, countrycolor: "#30363d",
+      showcoastlines: true, coastlinecolor: "#30363d",
+      bgcolor: "#0d1117"
+    },
+    paper_bgcolor: "#0d1117",
+    margin: { l:0, r:0, t:0, b:0 },
+    showlegend: false
+  }, { responsive: true });
+}
+
+function renderRingsList() {
+  const list = document.getElementById("ringsList");
+  list.innerHTML = "";
+
+  const res = active().result;
+  const datasetLabel = active().label;
+
+  if (!res.rings.length) {
+    list.innerHTML = `<div class="small warn">No rings yet for ${escapeHtml(datasetLabel)}.</div>`;
+    return;
+  }
+
+  if (res.conv) {
+    const head = document.createElement("div");
+    head.className = "small";
+    head.innerHTML =
+      `<span class="ok"><b>${escapeHtml(datasetLabel)} convergence:</b></span> ` +
+      `max miss ${res.conv.maxMiss.toFixed(2)}° (RMS ${res.conv.rmsMiss.toFixed(2)}°) @ ` +
+      `(${res.conv.lat.toFixed(3)}, ${res.conv.lon.toFixed(3)})`;
+    list.appendChild(head);
+  }
+
+  const ringPalette = (activeKey === "stage1") ? ringColorsStage : ringColorsRoamy;
+
+  res.rings.forEach((ring, idx) => {
+    const col = ringPalette[idx % ringPalette.length];
+    const matches = ring.inliers.map(x=>x.name).join(", ");
+    const countriesStr = ring.inliers.map(x=>x.country).filter(Boolean).join(", ");
+    const cityLetters = ringLettersCity(ring);
+    const countryLetters = ringLettersCountry(ring);
+
+    const card = document.createElement("div");
+    card.className = "ringItem";
+    card.innerHTML = `
+      <div class="ringTitle">
+        <span class="swatch" style="background:${col};"></span>
+        ${escapeHtml(datasetLabel)} — Ring ${idx+1}
+        <span class="pill">${ring.count} pts</span>
+        <span class="pill">avg ${ring.avgErr.toFixed(2)}°</span>
+        <span class="pill">max ${ring.errMax.toFixed(2)}°</span>
+      </div>
+
+      <div class="ringMeta"><b>Matches:</b> ${escapeHtml(matches)}</div>
+      <div class="ringMeta"><b>Countries:</b> ${escapeHtml(countriesStr || "(unknown)")}</div>
+
+      <div class="ringMeta"><b>Ring letters (City):</b> ${pillsFromLetters(cityLetters)} <span class="pill mono">${cityLetters}</span></div>
+      <div class="ringMeta"><b>Ring letters (Country):</b> ${pillsFromLetters(countryLetters)} <span class="pill mono">${countryLetters}</span></div>
+    `;
+    list.appendChild(card);
+  });
+
+  if (res.meta) {
+    const foot = document.createElement("div");
+    foot.className = "small";
+    foot.style.marginTop = "8px";
+    foot.innerHTML = `<span class="mono">meta:</span> ${escapeHtml(JSON.stringify(res.meta))}`;
+    list.appendChild(foot);
+  }
+}
+
+/* =========================
+   UI wiring
+   ========================= */
+const datasetSelect = document.getElementById("datasetSelect");
+const activeInfo = document.getElementById("activeInfo");
+const tolSlider = document.getElementById("tol");
+const tolLabel  = document.getElementById("tolLabel");
+const minPtsSlider = document.getElementById("minPts");
+const minLabel  = document.getElementById("minLabel");
+const attSlider  = document.getElementById("attempts");
+const attLabel   = document.getElementById("attLabel");
+const effSlider  = document.getElementById("effort");
+const effLabel   = document.getElementById("effLabel");
+const status    = document.getElementById("status");
+
+function setLabels() {
+  tolLabel.textContent = Number(tolSlider.value).toFixed(2);
+  minLabel.textContent = String(minPtsSlider.value);
+  attLabel.textContent = String(attSlider.value);
+  effLabel.textContent = (Number(effSlider.value) === 1) ? "Fast" : (Number(effSlider.value) === 3) ? "Heavy" : "Medium";
+}
+[tolSlider, minPtsSlider, attSlider, effSlider].forEach(el => el.addEventListener("input", setLabels));
+
+["showStagePoints","showRoamyPoints","showStageRings","showRoamyRings","ringPointFilter"].forEach(id=>{
+  document.getElementById(id).addEventListener("change", ()=>{
+    renderGlobe();
+    renderRingsList();
+  });
+});
+
+datasetSelect.addEventListener("change", () => {
+  activeKey = datasetSelect.value;
+  updateActiveInfo();
+  status.innerHTML = `Switched to <b>${escapeHtml(active().label)}</b>.`;
+  renderGlobe();
+  renderRingsList();
+});
+
+document.getElementById("copyStageToRoamy").addEventListener("click", () => {
+  datasets.roamy.locations = deepClone(datasets.stage1.locations);
+  datasets.roamy.result = { rings:[], conv:null, uncovered:null, meta:null };
+  status.innerHTML = `<span class="ok">Copied</span> Stage 1 → Roamy (and cleared Roamy result).`;
+  updateActiveInfo();
+  renderGlobe(); renderRingsList();
+});
+
+document.getElementById("copyRoamyToStage").addEventListener("click", () => {
+  datasets.stage1.locations = deepClone(datasets.roamy.locations);
+  datasets.stage1.result = { rings:[], conv:null, uncovered:null, meta:null };
+  status.innerHTML = `<span class="ok">Copied</span> Roamy → Stage 1 (and cleared Stage 1 result).`;
+  updateActiveInfo();
+  renderGlobe(); renderRingsList();
+});
+
+document.getElementById("clearActive").addEventListener("click", () => {
+  active().locations = [];
+  active().result = { rings:[], conv:null, uncovered:null, meta:null };
+  status.innerHTML = `<span class="ok">Cleared</span> ${escapeHtml(active().label)}.`;
+  updateActiveInfo();
+  renderGlobe(); renderRingsList();
+});
+
+document.getElementById("resetBtn").addEventListener("click", () => {
+  datasets.stage1.locations = deepClone(DEFAULT_STAGE1);
+  datasets.roamy.locations  = deepClone(DEFAULT_ROAMY);
+  datasets.stage1.result = { rings:[], conv:null, uncovered:null, meta:null };
+  datasets.roamy.result  = { rings:[], conv:null, uncovered:null, meta:null };
+  status.innerHTML = `Reset defaults (both datasets).`;
+  updateActiveInfo();
+  renderGlobe(); renderRingsList();
+});
+
+document.getElementById("addCityBtn").addEventListener("click", async () => {
+  const q = document.getElementById("cityQuery").value.trim();
+  if (!q) { status.textContent = "Type a location query first."; return; }
+  status.innerHTML = `<span class="warn">Geocoding…</span> ${escapeHtml(q)} → ${escapeHtml(active().label)}`;
+
+  try {
+    const g = await geocodeCity(q);
+    active().locations.push(makeLoc(`${g.name}${g.country ? ", " + g.country : ""}`, g.lat, g.lon, g.country || ""));
+    active().result = { rings:[], conv:null, uncovered:null, meta:null };
+
+    status.innerHTML =
+      `<span class="ok">Added to ${escapeHtml(active().label)}:</span> ${escapeHtml(g.name)} (${g.lat.toFixed(4)}, ${g.lon.toFixed(4)})` +
+      (g.country ? ` • ${escapeHtml(g.country)}` : ``);
+
+    updateActiveInfo();
+    renderGlobe();
+    renderRingsList();
+  } catch (e) {
+    status.innerHTML = `<span class="warn">${escapeHtml(e.message || String(e))}</span>`;
+  }
+});
+
+document.getElementById("removeBtn").addEventListener("click", () => {
+  const name = document.getElementById("removeName").value.trim();
+  if (!name) { status.textContent = "Type the exact location name to remove."; return; }
+
+  const before = active().locations.length;
+  active().locations = active().locations.filter(x => (x.name || "") !== name);
+
+  if (active().locations.length !== before) {
+    active().result = { rings:[], conv:null, uncovered:null, meta:null };
+    status.innerHTML = `<span class="ok">Removed from ${escapeHtml(active().label)}:</span> ${escapeHtml(name)}`;
+    updateActiveInfo();
+    renderGlobe(); renderRingsList();
+  } else {
+    status.innerHTML = `<span class="warn">Not found in ${escapeHtml(active().label)}:</span> ${escapeHtml(name)} (must match exactly)`;
+  }
+});
+
+document.getElementById("geocodeMissingActive").addEventListener("click", async () => {
+  const missing = active().locations.filter(x => !(isFinite(x.lat) && isFinite(x.lon)));
+  if (!missing.length) {
+    status.innerHTML = `<span class="ok">No missing coords</span> in ${escapeHtml(active().label)}.`;
+    return;
+  }
+  status.innerHTML = `<span class="warn">Geocoding ${missing.length} missing…</span>`;
+  let ok = 0;
+
+  for (let i=0; i<missing.length; i++){
+    const item = missing[i];
+    try {
+      const g = await geocodeCity(item.name);
+      item.lat = g.lat; item.lon = g.lon;
+      item.country = item.country || g.country || "";
+      ok++;
+      status.innerHTML = `<span class="warn">Geocoding…</span> ${i+1}/${missing.length} • ok ${ok}`;
+      await sleep(250);
+    } catch (e) {}
+  }
+
+  active().result = { rings:[], conv:null, uncovered:null, meta:null };
+  status.innerHTML = `<span class="ok">Geocoded</span> ${ok}/${missing.length} missing for ${escapeHtml(active().label)}.`;
+  updateActiveInfo();
+  renderGlobe();
+  renderRingsList();
+});
+
+document.getElementById("suggestBtn").addEventListener("click", () => {
+  const locs = getLocationsForRingGeneration();
+  const points = getPointUnitsFromLocations(locs);
+  const tol = Number(tolSlider.value);
+  const minPts = Number(minPtsSlider.value);
+
+  if (points.length < 3) { status.textContent = "Need at least 3 geocoded locations for ring generation."; return; }
+
+  status.textContent = `Suggesting rings (greedy) → writes into ACTIVE dataset (${active().label})…`;
+  const rings = pickRingsExclusiveGreedy(points, tol, minPts);
+  const conv = convergenceStats(rings);
+
+  active().result = { rings, conv, uncovered: null, meta: { mode:"greedy", tol, minPts, pointsUsed: document.getElementById("ringPointFilter").value } };
+
+  const usedCount = rings.reduce((s,r)=>s+r.count,0);
+  const convText = conv ? ` • max miss ${conv.maxMiss.toFixed(2)}° @ (${conv.lat.toFixed(3)}, ${conv.lon.toFixed(3)})` : "";
+  status.innerHTML = `<span class="ok">${escapeHtml(active().label)}:</span> ${rings.length} ring(s) using ${usedCount} points.${convText}`;
+
+  renderGlobe();
+  renderRingsList();
+});
+
+document.getElementById("idealBtn").addEventListener("click", () => {
+  const locs = getLocationsForRingGeneration();
+  const points = getPointUnitsFromLocations(locs);
+  const tol = Number(tolSlider.value);
+  const minPts = Number(minPtsSlider.value);
+  const tries = Number(attSlider.value);
+
+  if (points.length < 3) { status.textContent = "Need at least 3 geocoded locations for ring generation."; return; }
+
+  status.textContent = `Searching (single setting) → writes into ACTIVE dataset (${active().label})…`;
+  const best = findIdealCover(points, tol, minPts, tries);
+
+  if (!best) {
+    status.innerHTML = `<span class="warn">No viable candidates under these settings.</span>`;
+    return;
+  }
+
+  active().result = {
+    rings: best.rings,
+    conv: best.conv,
+    uncovered: best.uncovered,
+    meta: { mode:"single", tol, minPts, tries, pointsUsed: document.getElementById("ringPointFilter").value }
+  };
+
+  const total = points.length;
+  const used = best.rings.reduce((s,r)=>s+r.count,0);
+  const coverLine = (best.uncovered === 0) ? `<span class="ok">Perfect cover</span>` : `<span class="warn">${best.uncovered} leftover</span>`;
+  const convLine = best.conv ? `max miss ${best.conv.maxMiss.toFixed(2)}° @ (${best.conv.lat.toFixed(3)}, ${best.conv.lon.toFixed(3)})` : "no convergence";
+  status.innerHTML = `${escapeHtml(active().label)}: ${coverLine} • used ${used}/${total} • ${convLine}`;
+
+  renderGlobe();
+  renderRingsList();
+});
+
+document.getElementById("autoBtn").addEventListener("click", async () => {
+  const locs = getLocationsForRingGeneration();
+  const points = getPointUnitsFromLocations(locs);
+  if (points.length < 3) { status.textContent = "Need at least 3 geocoded locations for ring generation."; return; }
+
+  status.innerHTML = `<span class="warn">AUTO optimizing…</span> (writes into ACTIVE dataset: ${escapeHtml(active().label)})`;
+  const best = await autoOptimizeForActive();
+
+  if (!best) {
+    status.innerHTML = `<span class="warn">AUTO optimize found no viable solutions.</span>`;
+    return;
+  }
+
+  active().result = { rings: best.rings, conv: best.conv, uncovered: best.uncovered, meta: best.meta };
+
+  if (best.meta && typeof best.meta.tol === "number") tolSlider.value = best.meta.tol;
+  if (best.meta && typeof best.meta.minPts === "number") minPtsSlider.value = best.meta.minPts;
+  setLabels();
+
+  const total = points.length;
+  const used = best.rings.reduce((s,r)=>s+r.count,0);
+  const coverLine = (best.uncovered === 0) ? `<span class="ok"><b>Perfect cover</b></span>` : `<span class="warn"><b>${best.uncovered} leftover</b></span>`;
+  const convLine = best.conv
+    ? `<b>max miss</b> ${best.conv.maxMiss.toFixed(2)}° • point (${best.conv.lat.toFixed(3)}, ${best.conv.lon.toFixed(3)})`
+    : `no convergence`;
+  status.innerHTML = `${escapeHtml(active().label)}: ${coverLine} • used ${used}/${total} • ${convLine}`;
+
+  renderGlobe();
+  renderRingsList();
+});
+
+document.getElementById("clearResultBtn").addEventListener("click", () => {
+  active().result = { rings:[], conv:null, uncovered:null, meta:null };
+  status.innerHTML = `Cleared result for ${escapeHtml(active().label)}.`;
+  renderGlobe(); renderRingsList();
+});
+
+/* NEW: make Plotly re-layout cleanly when flex sizes change */
+function handleResize(){
+  try { Plotly.Plots.resize("globe"); } catch(e) {}
+}
+window.addEventListener("resize", handleResize);
+
+/* init */
+setLabels();
+updateActiveInfo();
+renderGlobe();
+renderRingsList();
+setTimeout(handleResize, 0);
+</script>
+</body>
+</html>
